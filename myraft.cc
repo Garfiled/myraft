@@ -112,6 +112,7 @@ void tick() {
 }
 
 void startElection() {
+	printf("startElection\n");
 	mu.lock();
 	rc->state = Candidate;
 	rc->leader = 0;
@@ -197,10 +198,8 @@ void startRaftNode(RaftCore* rc)
 
 void sysmon() 
 {
-	while (1)
-	{
-		tm.detect_timers();
-	}
+	
+	tm.detect_timers();
 
 }
 

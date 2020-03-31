@@ -3,7 +3,9 @@
 #include <iostream>
 #include <functional>
 #include <vector>
- 
+#include <mutex>
+#include <condition_variable> 
+
 class TimerManager;
  
 class Timer
@@ -32,7 +34,6 @@ private:
 	//过期
 	unsigned long long  m_nExpires;
 	int  m_nHeapIndex;
- 
 };
  
 class TimerManager
@@ -42,6 +43,9 @@ public:
 	static unsigned long long get_current_millisecs();
 	//探测执行
 	void detect_timers();
+
+	std::mutex mu;
+	std::condition_variable cv;
  
 private:
 	friend class Timer;

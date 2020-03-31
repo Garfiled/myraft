@@ -41,11 +41,18 @@ void Timer::on_timer(unsigned long long now)
 // TimerManager
 void TimerManager::add_timer(Timer* timer)
 {
+	this->mu.lock();
 	//插到数组最后一个位置上，上浮
 	timer->m_nHeapIndex = heap_.size();
 	HeapEntry entry = { timer->m_nExpires, timer};
 	heap_.push_back(entry);
 	up_heap(heap_.size() - 1);
+	int size = heap_.size();
+	this->mu.unlock();
+	if (size==1) {
+		this->cv.notify_one();
+	}
+
 }
  
 void TimerManager::remove_timer(Timer* timer)
@@ -53,7 +60,7 @@ void TimerManager::remove_timer(Timer* timer)
 	//头元素用数组未元素替换，然后下沉
 	size_t index = timer->m_nHeapIndex;
 	if (!heap_.empty() && index < heap_.size())
-	{
+{
 		if (index == heap_.size() - 1) //only one timer
 		{
 			heap_.pop_back();
@@ -74,13 +81,29 @@ void TimerManager::remove_timer(Timer* timer)
  
 void TimerManager::detect_timers()
 {
-	unsigned long long now = get_current_millisecs();
- 
-	while (!heap_.empty() && heap_[0].time <= now)
+	while (1) 
 	{
+		std::unique_lock<std::mutex> lk(this->mu);
+		if (this->heap_.empty())
+		{
+			this->cv.wait(lk);
+			continue;
+		}
+		unsigned long long now = get_current_millisecs();
+
+		if (heap_[0].time <= now) {
+			this->cv.wait_for(lk,std::chrono::milliseconds(now-heap_[0].time));
+			continue;
+		}
+
+
 		Timer* timer = heap_[0].timer;
 		remove_timer(timer);
+		lk.unlock();
+		this->cv.notify_one();
+
 		timer->on_timer(now);
+
 	}
 }
  
