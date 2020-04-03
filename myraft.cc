@@ -6,7 +6,26 @@
 #include <unistd.h>
 
 #include "timer.h"
+#include "raft.h"
 
+
+class RaftCore;
+
+
+TimerManager tm;
+RaftCore* rc;
+
+
+struct RaftMsg {
+	RaftMsgType msgType;
+	int64_t id;
+	int64_t term;
+	int64_t logTerm;
+	int64_t logIndex;
+	std::vector<Entry*> entries;
+};
+
+enum RaftState {Follower = 0,Candidate = 1,Leader = 2};
 
 class SpinLock {
     std::atomic_flag locked = ATOMIC_FLAG_INIT ;
@@ -19,32 +38,6 @@ public:
     }
 };
 
-class RaftCore;
-
-std::mutex mu;
-std::condition_variable cv;
-TimerManager tm;
-RaftCore* rc;
-
-struct Entry {
-	int term;
-	int index;
-	char* record;
-};
-
-enum RaftMsgType {msg_entry = 1,msg_hub = 2,msg_vote = 3};
-
-struct RaftMsg {
-	RaftMsgType msgType;
-	int id;
-	int term;
-	int logTerm;
-	int logIndex;
-	std::vector<Entry*> entries;
-};
-
-enum RaftState {Follower = 0,Candidate = 1,Leader = 2};
-
 class RaftCore
 {
 public:
@@ -52,29 +45,40 @@ public:
 	~RaftCore();
 
 	void tick();
-	void startElection();
 	int propose(Entry* e);
 	void vote_back(int,bool);
 
-	int id;
+	int64_t id;
 	RaftState state;
 	int leader;
-	int term;
+	int64_t term;
 	int voteFor;
 	int lastLogTerm;
 	int lastLogIndex;
+	RaftMsg* lastMsg;
+
+	// 这里最好可以实现先自旋一阵再进行等待，因为对RaftCore的处理理论上都是很短的操作
+	SpinLock spinLock;
+
 	std::vector<RaftMsg*> messageVec;
 };
 
+class RaftNode {
+public:
+	Wal wal;
+};
+
 int RaftCore::propose(Entry* e) {
-	mu.lock();
+	if (e==NULL)
+		return -1;
+	this->spinLock.lock();
 	if (this->leader == 0) {
-		mu.unlock();
+		this->spinLock.unlock();
 		return -1;
 	}
 	if (this->state != Leader) {
 		int l = this->leader;
-		mu.unlock();
+		this->spinLock.unlock();
 		return l;
 	}
 		
@@ -84,36 +88,47 @@ int RaftCore::propose(Entry* e) {
 	
 	this->lastLogIndex++;
 
-	RaftMsg* m = new RaftMsg();
-	m->msgType = msg_entry;
-	m->entries.push_back(e);
-	this->messageVec.push_back(m);
-	mu.unlock();
-	cv.notify_one();
+	// entry batch
+	if (this->lastMsg!=NULL && (this->lastMsg->msgType == msg_prop ||this->lastMsg->msgType == msg_hub)) {
+		this->lastMsg->msgType = msg_prop;
+		this->lastMsg->entries.push_back(e);
+	} else {
+		RaftMsg* m = new RaftMsg();
+		m->msgType = msg_prop;
+		this->messageVec.push_back(m);
+		this->lastMsg = m;
+	}
+
+	this->spinLock.unlock();
 	return 0;
 }
 
 RaftCore::RaftCore(int _id) {
 	this->id = _id;
+	this->leader = 0;
+	this->state = Follower;
+	this->term = 0;
+	this->voteFor = 0;
+	this->lastLogTerm = 0;
+	this->lastLogIndex = 0;
+	this->lastMsg = NULL;
 }
 
-void tick() {
-	mu.lock();
+void tick(void* arg) {
+	RaftCore* rc =(RaftCore*)arg;
+	rc->spinLock.lock();
 	if (rc->state == Leader) {
 		RaftMsg* m = new RaftMsg();
 		m->msgType = msg_hub;
 		m->term = rc->term;
 		rc->messageVec.push_back(m);
-		mu.unlock();
-		cv.notify_one();
-		return;
 	}
-	mu.unlock();
+	rc->spinLock.unlock();
 }
 
-void startElection() {
-	printf("startElection\n");
-	mu.lock();
+void startElection(void* arg) {
+	RaftCore* rc =(RaftCore*)arg;
+	rc->spinLock.lock();
 	rc->state = Candidate;
 	rc->leader = 0;
 	rc->term++;
@@ -127,18 +142,17 @@ void startElection() {
 	msg->logTerm = rc->lastLogTerm;
 	msg->logIndex = rc->lastLogIndex;
 	rc->messageVec.push_back(msg);
-	mu.unlock();
-	cv.notify_one();
+	rc->spinLock.unlock();
 }
 
 void RaftCore::vote_back(int term,bool win) {
-	mu.lock();
+	this->spinLock.lock();
 	if (this->term > term) {
 	} else if (this->term == term) {
 		if (win) {
 			this->state = Leader;
 			this->leader = id;
-			printf("node.%d become leader on term %d\n",this->id,this->term);
+			printf("node.%lld become leader on term %lld\n",this->id,this->term);
 		} else {
 			this->state = Follower;
 			this->leader = 0;
@@ -150,41 +164,101 @@ void RaftCore::vote_back(int term,bool win) {
 		this->voteFor = 0;
 	}
 
-	mu.unlock();
+	// 生成一条noop entry
 
+
+
+	Entry* e = new Entry();
+	e->term = this->term;
+	e->index = this->lastLogIndex+1; 
+	
+	this->lastLogTerm = this->term;
+	this->lastLogIndex = this->lastLogIndex+1;
+
+	// entry batch
+	if (this->lastMsg!=NULL && (this->lastMsg->msgType == msg_prop ||this->lastMsg->msgType == msg_hub)) {
+		this->lastMsg->msgType = msg_prop;
+		this->lastMsg->entries.push_back(e);
+	} else {
+		RaftMsg* m = new RaftMsg();
+		m->msgType = msg_prop;
+		m->entries.push_back(e);
+		this->messageVec.push_back(m);
+		this->lastMsg = m;
+	}
+
+	this->spinLock.unlock();
 }
 
-void startRaftNode(RaftCore* rc) 
+void startRaftNode(RaftNode* rn,RaftCore* rc) 
 {
-	printf("startRaftNode node.%d\n", rc->id);
+	printf("startRaftNode node.%lld\n", rc->id);
 	while (true) 
 	{
-		std::unique_lock<std::mutex> lk(mu);
+		rc->spinLock.lock();
 		if (rc->messageVec.size()==0) {
-			cv.wait(lk);
+			rc->spinLock.unlock();
 			continue;
 		}
 
 		std::vector<RaftMsg*> msgVec = rc->messageVec;
 		rc->messageVec.clear();
-		lk.unlock();
-		cv.notify_one();		
+		rc->spinLock.unlock();
 
 		for (auto msg : msgVec)
 		{
-			if (msg->msgType == msg_entry) {
-				printf("node.%d on term.%d recv %lu\n",rc->id,rc->term,msg->entries.size());
+			if (msg->msgType == msg_prop) {
+				printf("node.%lld on term.%lld recv %lu\n",rc->id,rc->term,msg->entries.size());
+
+				// write wal
+				for (auto e : msg->entries) {
+					std::string propRec;
+					propRec.append("aa55",4);
+					int32_t dataLength = 4 + 8 + 8 + e->record.size();
+					propRec.append((char*)&dataLength,4);
+					int32_t propMsg = msg_prop;
+					propRec.append((char*)&propMsg,4);
+					propRec.append((char*)&e->term,8);
+					propRec.append((char*)&e->index,8);
+					propRec.append(e->record);
+
+					rn->wal.writeWal(propRec.c_str(),propRec.size());
+				}
+
+
+				// appendEntries
+
+				// write mem store
+
+
 
 			} else if (msg->msgType == msg_vote) {
-				printf("node.%d start election on term %d\n", msg->id,msg->term);
+				printf("node.%lld start election on term %lld\n", msg->id,msg->term);
+
+				std::string voteRec;
+				voteRec.append("aa55",4);
+				int32_t dataLength = 4 + 8 + 8;
+				voteRec.append((char*)&dataLength,4);
+				int32_t voteMsg = msg_vote;
+				voteRec.append((char*)&voteMsg,4);
+				voteRec.append((char*)&msg->term,8);
+				voteRec.append((char*)&msg->id,8);
+				// write wal
+				rn->wal.writeWal(voteRec.c_str(),voteRec.size());
 				
+				// requestVote
+
 				rc->vote_back(msg->term,true);
 
 				// Timer rc_election_timer(tm);
 				// rc_election_timer.start(startElection,1000, Timer::TimerType::ONCE);
 			} else if (msg->msgType == msg_hub) {
-				printf("node.%d send heartbeat\n", msg->id);
-			} else {
+				// printf("node.%lld send heartbeat\n", msg->id);
+
+				// appendEntries
+			} else if (msg->msgType == msg_append){
+
+				// write wal
 				printf("unsupport msgType:%d\n", msg->msgType);
 			}
 
@@ -198,27 +272,52 @@ void startRaftNode(RaftCore* rc)
 
 void sysmon() 
 {
-	
 	tm.detect_timers();
-
 }
+
 
 int main(int argc, char const *argv[])
 {
 
+	// std::thread sysmon_worker(sysmon);
+
+	RaftNode* rn = new RaftNode();
+	std::vector<Entry*> es;
+	int64_t term;
+	int64_t voteFor;
+	std::cout << "open wal..." << std::endl;
+	int ret = rn->wal.openWal("./wal",es,&term,&voteFor);
+	if (ret!=0) {
+		std::cout << "open wal failed " << ret << std::endl;
+		return 1;
+	}
+	
+	rc = new RaftCore(1);
+	rc->term = term;
+	rc->voteFor = voteFor;
+
+	if (es.size()>0) {
+		rc->lastLogTerm = es.back()->term;
+		rc->lastLogIndex = es.back()->index;
+	}
+
+	// std::cout << "start raftcore:" << rc->term << " " << rc->voteFor << std::endl; 
+	// std::cout << "start raftcore:" << es.size() << std::endl; 
+
+	std::thread node_worker(startRaftNode,rn,rc);
+
+
+
+	Timer rc_ticker(tm);
+	rc_ticker.start(tick,400, Timer::TimerType::CIRCLE,rc);
+
+	Timer rc_election_timer(tm);
+	rc_election_timer.start(startElection,1000, Timer::TimerType::ONCE,rc);
+
 	std::thread sysmon_worker(sysmon);
 
 	
-	rc = new RaftCore(1);
 
-	std::thread node_worker(startRaftNode,rc);
-
-	
-	// Timer rc_ticker(tm);
-	// rc_ticker.start(tick,400, Timer::TimerType::CIRCLE);
-
-	Timer rc_election_timer(tm);
-	rc_election_timer.start(startElection,1000, Timer::TimerType::ONCE);
 
 
 
@@ -230,7 +329,7 @@ int main(int argc, char const *argv[])
 
 	
 	sysmon_worker.join();
-	// node_worker.join();
+	node_worker.join();
 
 	return 0;
 }

@@ -35,7 +35,7 @@ void Timer::on_timer(unsigned long long now)
 	{
 		m_nHeapIndex = -1;
 	}
-	m_timerfunc();
+	m_timerfunc(arg);
 }
  
 // TimerManager
@@ -102,6 +102,7 @@ void TimerManager::detect_timers()
 		lk.unlock();
 		this->cv.notify_one();
 
+		// 应该交给worker处理
 		timer->on_timer(now);
 
 	}

@@ -17,7 +17,7 @@ public:
     ~Timer ();
 	//启动一个定时器
 	template<typename Func>
-    void   start (Func func, unsigned int ms, TimerType type);
+    void   start (Func func, unsigned int ms, TimerType type,void* _arg);
     //终止一个定时器
 	void   stop ();
 private:
@@ -27,7 +27,8 @@ private:
 	friend class TimerManager;
 	TimerManager& manager_;
 	//调用函数，包括仿函数
-	std::function<void(void)> m_timerfunc;
+	std::function<void(void*)> m_timerfunc;
+	void* arg;
 	TimerType timerType_;
 	//间隔
 	unsigned int m_nInterval;
@@ -69,10 +70,11 @@ private:
 };
  
 template <typename Func>
-inline void  Timer::start(Func fun, unsigned int interval, TimerType timetpe)
+inline void  Timer::start(Func fun, unsigned int interval, TimerType timetpe,void* _arg)
 {
 	m_nInterval = interval;
 	m_timerfunc = fun;
+	arg = _arg;
 	m_nExpires = interval + TimerManager::get_current_millisecs();
 	manager_.add_timer(this);
 	timerType_= timetpe;
