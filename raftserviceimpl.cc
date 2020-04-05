@@ -12,10 +12,11 @@ grpc::Status RaftServiceImpl::RequestVote(grpc::ServerContext* context,const raf
     int term = 0;
     MsgBack* mb = nullptr;
 
-    this->rc->spinLock.lock();
+    this->rc->mu.lock();
     if (rc->state == Follower && (rc->voteFor==0 || rc->voteFor == req->candidateid()) && req->term()>=rc->term 
         && req->lastlogterm()>=rc->lastLogTerm && req->lastlogindex()>=rc->lastLogIndex) {
-        // reset timer
+        
+        rc->resetElectionTimer();
 
         rc->voteFor = req->candidateid();
         rc->term = req->term();
@@ -28,17 +29,17 @@ grpc::Status RaftServiceImpl::RequestVote(grpc::ServerContext* context,const raf
         mb = new MsgBack();
         msg->back = mb;
 
-        rc->messageVec.push_back(msg);
+        rc->msg_wal_vec.push_back(msg);
 
     } else {
-        printf("node.%lld term.%lld refuse vote c.id %u c.term %lld\n",rc->id,rc->term,req->candidateid(),req->term());
+        printf("node.%lld term.%lld refuse vote c.id %u c.term %lld\n",this->rc->id,this->rc->term,req->candidateid(),req->term());
     }
     term = rc->term;
-    this->rc->spinLock.unlock();
+    this->rc->mu.unlock();
 
 
     // wait for
-    if (mb!=nullptr) {
+    if (mb) {
         std::unique_lock<std::mutex> lk(mb->mu);
         mb->cv.wait(lk);
         if (mb->err==0) {
@@ -50,6 +51,7 @@ grpc::Status RaftServiceImpl::RequestVote(grpc::ServerContext* context,const raf
     reply->set_term(term);
     reply->set_votegranted(voteGranted);
 
+    std::cout << "RequestVote func end" << std::endl;
     return grpc::Status::OK;
 
 }
@@ -60,7 +62,7 @@ grpc::Status RaftServiceImpl::AppendEntries(grpc::ServerContext* context,const r
     bool success = false;
     MsgBack* mb = nullptr;
 
-    this->rc->spinLock.lock();
+    this->rc->mu.lock();
     if (rc->term > req->term())
         term = rc->term;
     else {
@@ -70,6 +72,7 @@ grpc::Status RaftServiceImpl::AppendEntries(grpc::ServerContext* context,const r
         rc->state = Follower;
 
         // reset election timeout
+        rc->resetElectionTimer();
 
         if (rc->lastLogTerm == req->prevlogterm() && rc->lastLogIndex==req->prevlogindex()) {
             if (req->entries().size()>0) {              
@@ -91,7 +94,7 @@ grpc::Status RaftServiceImpl::AppendEntries(grpc::ServerContext* context,const r
                     rc->lastLogTerm = msg->ents.back()->term;
                     rc->lastLogIndex = msg->ents.back()->index;
 
-                    rc->messageVec.push_back(msg);
+                    rc->msg_wal_vec.push_back(msg);
                     
             } else {
                 success = true;
@@ -120,7 +123,7 @@ grpc::Status RaftServiceImpl::AppendEntries(grpc::ServerContext* context,const r
         }
     }
     term = rc->term;
-    this->rc->spinLock.unlock();
+    this->rc->mu.unlock();
 
     if (mb != nullptr) {
         std::unique_lock<std::mutex> lk(mb->mu);
@@ -143,9 +146,11 @@ grpc::Status RaftServiceImpl::Tran(grpc::ServerContext* context,const raftpb::Re
 }
 
 
-void startRaftService(std::string address) {
+void startRaftService(std::string address,RaftNode* rn,RaftCore* rc) {
     std::cout << "startRaftService:" << address << std::endl;
     RaftServiceImpl service;
+    service.rn = rn;
+    service.rc = rc;
 
     grpc::ServerBuilder builder;
 

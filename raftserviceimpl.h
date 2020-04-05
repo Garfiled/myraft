@@ -32,4 +32,4 @@ public:
     uint64_t next_index;
 };
 
-void startRaftService(std::string address);
+void startRaftService(std::string address,RaftNode*,RaftCore*);

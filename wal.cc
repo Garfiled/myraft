@@ -85,11 +85,11 @@ int Wal::openWal(const char* filename,std::vector<Entry*>& es,HardState& hs)
 	return 0;
 }
 
-int Wal::writeRecord(const char* rec,int size) 
+int Wal::writeRecord(std::string rec) 
 {
-	int n = write(this->fd_,rec,size);
+	int n = write(this->fd_,rec.c_str(),rec.size());
 
-	if (n != size)
+	if (n != rec.size())
 		return 1;
 	return 0;
 }

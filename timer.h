@@ -44,6 +44,7 @@ public:
 	static unsigned long long get_current_millisecs();
 	//探测执行
 	void detect_timers();
+	void reset_timer(Timer*,int);
 
 	std::mutex mu;
 	std::condition_variable cv;
@@ -52,6 +53,7 @@ private:
 	friend class Timer;
 	//添加一个定时器
 	void add_timer(Timer* timer);
+
 	//移除一个定时器
 	void remove_timer(Timer* timer);
 	//定时上浮

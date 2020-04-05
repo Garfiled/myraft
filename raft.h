@@ -6,6 +6,7 @@
 #include <atomic>
 
 #include "raftserviceimpl.h"
+#include "timer.h"
 
 class RaftCore;
 class RaftNode;
@@ -44,6 +45,33 @@ public:
 class RaftMsg {
 public:
 	RaftMsg(RaftMsgType mt):msg_type(mt) {};
+	int encoder(std::string& rec) 
+	{
+		if (msg_type==msg_vote) {
+			rec.append("aa55",4);
+			int32_t dataLength = 4 + 8 + 8;
+			rec.append((char*)&dataLength,4);
+			int32_t voteMsg = msg_vote;
+			rec.append((char*)&voteMsg,4);
+			rec.append((char*)&term,8);
+			rec.append((char*)&id,8);
+		} else if (msg_type == msg_prop){
+			for (auto e : ents) {
+				rec.append("aa55",4);
+				int32_t dataLength = 4 + 8 + 8 + e->record.size();
+				rec.append((char*)&dataLength,4);
+				int32_t propMsg = msg_prop;
+				rec.append((char*)&propMsg,4);
+				rec.append((char*)&e->term,8);
+				rec.append((char*)&e->index,8);
+				rec.append(e->record);
+			}
+		} else {
+			return 1;
+		}
+
+		return 0;
+	}
 	RaftMsgType msg_type;
 	uint64_t id;
 	uint64_t term;
@@ -64,7 +92,7 @@ public:
 	int fd_;
 
 	int openWal(const char* filename,std::vector<Entry*>&,HardState&);
-	int writeRecord(const char*,int);
+	int writeRecord(std::string);
 };
 
 
@@ -78,6 +106,8 @@ public:
 	int propose(Entry* e);
 	int vote_back(int,bool,int);
 	void push_entry(Entry* e);
+	RaftMsg* makePropMsg(Entry* e);
+	void resetElectionTimer();
 
 	int64_t id;
 	RaftState state;
@@ -89,12 +119,14 @@ public:
 
 	std::vector<Entry*> ents;
 
-	SpinLock spinLock;
-	std::condition_variable cv;
-
 	std::mutex mu;
-	std::condition_variable msgCV;
-	std::vector<RaftMsg*> messageVec;
+
+	std::vector<RaftMsg*> msg_wal_vec;
+
+	std::condition_variable msg_wal_cv;
+
+	Timer* election_timer;
+	TimerManager tm;
 };
 
 
@@ -102,6 +134,10 @@ class RaftNode {
 public:
 	Wal wal;
 	std::map<int,RaftClient*> peers;
+
+	std::vector<RaftMsg*> msg_node_vec;
+	std::mutex msg_node_mu;
+	std::condition_variable msg_node_cv;
 
 	int handleVote(RaftCore*,RaftMsg*);
 	int handleProp(RaftCore*,RaftMsg*);

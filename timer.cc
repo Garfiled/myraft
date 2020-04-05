@@ -23,7 +23,7 @@ void Timer::stop()
 		m_nHeapIndex = -1;
 	}
 }
- 
+
 void Timer::on_timer(unsigned long long now)
 {
 	if (timerType_ == TimerType::CIRCLE)
@@ -47,20 +47,33 @@ void TimerManager::add_timer(Timer* timer)
 	HeapEntry entry = { timer->m_nExpires, timer};
 	heap_.push_back(entry);
 	up_heap(heap_.size() - 1);
-	int size = heap_.size();
 	this->mu.unlock();
-	if (size==1) {
-		this->cv.notify_one();
-	}
-
+	this->cv.notify_one();
 }
+
+void TimerManager::reset_timer(Timer* timer,int interval)
+{
+	this->mu.lock();
+	remove_timer(timer);
+
+	timer->m_nExpires = TimerManager::get_current_millisecs()+interval;
+	timer->m_nInterval =interval;
+	
+	timer->m_nHeapIndex = heap_.size();
+	HeapEntry entry = { timer->m_nExpires, timer};
+	heap_.push_back(entry);
+	up_heap(heap_.size() - 1);
+	this->mu.unlock();
+	this->cv.notify_one();
+}
+
  
 void TimerManager::remove_timer(Timer* timer)
 {
 	//头元素用数组未元素替换，然后下沉
 	size_t index = timer->m_nHeapIndex;
 	if (!heap_.empty() && index < heap_.size())
-{
+	{
 		if (index == heap_.size() - 1) //only one timer
 		{
 			heap_.pop_back();
@@ -108,8 +121,6 @@ void TimerManager::detect_timers()
 
 		// 应该交给worker处理
 		timer->on_timer(now);
-
-		delete timer;
 	}
 }
  
