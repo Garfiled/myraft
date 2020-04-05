@@ -6,10 +6,11 @@
 
 #include "raft.h"
 
-int Wal::openWal(const char* filename,std::vector<Entry*>& es,int64_t* term,int64_t* voteFor) 
+int Wal::openWal(const char* filename,std::vector<Entry*>& es,HardState& hs) 
 {
-	fd = open(filename,O_RDWR|O_CREAT,0755);
-
+	int fd = open(filename,O_RDWR|O_CREAT,0755);
+	if (fd<=0)
+		return 1;
 	char* buf;
 	int n;
 	int32_t dataLength;
@@ -17,7 +18,6 @@ int Wal::openWal(const char* filename,std::vector<Entry*>& es,int64_t* term,int6
 	char* data;
 	int32_t msg_type;
 	int offset = 0;
-	std::string magic("aa55",4);
 
 	buf = new char[bufLen];
 
@@ -38,7 +38,7 @@ int Wal::openWal(const char* filename,std::vector<Entry*>& es,int64_t* term,int6
 		}
 
 		std::string headerMagic(buf,4);
-		if (headerMagic != magic)
+		if (headerMagic != "aa55")
 		{
 			return 10002;
 		}
@@ -64,13 +64,15 @@ int Wal::openWal(const char* filename,std::vector<Entry*>& es,int64_t* term,int6
 				e->term = *((int64_t*)data);
 				e->index = *((int64_t*)(data+8));
 				e->record = std::string(data+8+8,dataLength-4-8-8);
+
+				//
 				es.push_back(e);
 			} else if (msg_type == msg_vote) {
 				if (dataLength<8+8) {
 					return 10004;
 				}
-				*term = *((int64_t*)data);
-				*voteFor = *((int64_t*)(data+8));
+				hs.term = *((int64_t*)data);
+				hs.voteFor = *((int64_t*)(data+8));
 			} else {
 				return 10005;
 			}
@@ -79,12 +81,13 @@ int Wal::openWal(const char* filename,std::vector<Entry*>& es,int64_t* term,int6
 		offset += 4+4+dataLength;
 	}
 
+	this->fd_ = fd;
 	return 0;
 }
 
-int Wal::writeWal(const char* rec,int size) 
+int Wal::writeRecord(const char* rec,int size) 
 {
-	int n = write(this->fd,rec,size);
+	int n = write(this->fd_,rec,size);
 
 	if (n != size)
 		return 1;

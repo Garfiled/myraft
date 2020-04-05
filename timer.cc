@@ -81,6 +81,7 @@ void TimerManager::remove_timer(Timer* timer)
  
 void TimerManager::detect_timers()
 {
+	int delay = 0;
 	while (1) 
 	{
 		std::unique_lock<std::mutex> lk(this->mu);
@@ -89,22 +90,26 @@ void TimerManager::detect_timers()
 			this->cv.wait(lk);
 			continue;
 		}
+
 		unsigned long long now = get_current_millisecs();
 
-		if (heap_[0].time <= now) {
-			this->cv.wait_for(lk,std::chrono::milliseconds(now-heap_[0].time));
+		delay = heap_[0].time-now; 
+
+		if (delay>0) {
+			this->cv.wait_for(lk,std::chrono::milliseconds(delay));
 			continue;
 		}
-
 
 		Timer* timer = heap_[0].timer;
 		remove_timer(timer);
 		lk.unlock();
+
 		this->cv.notify_one();
 
 		// 应该交给worker处理
 		timer->on_timer(now);
 
+		delete timer;
 	}
 }
  

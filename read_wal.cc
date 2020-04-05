@@ -3,14 +3,17 @@
 #include <vector>
 #include <iostream>
 
-#include "raft.h"
+enum RaftMsgType {msg_prop = 1,msg_hub = 2,msg_vote = 3};
 
+struct Entry {
+	int term;
+	int index;
+	std::string record;
+};
 
-
-
-int main() 
+int main(int argc,char const *argv[]) 
 {
-	int fd = open("./wal",O_RDONLY);
+	int fd = open(argv[1],O_RDONLY);
 	if (fd<=0) {
 		std::cout << "open wal failed:" << fd << std::endl;
 		return 1;
@@ -71,7 +74,7 @@ int main()
 			data = buf+4+4;
 			msg_type = *((int32_t*)data);
 			data += 4;
-			if (msg_type == msg_entry) {
+			if (msg_type == msg_prop) {
 				if (dataLength<4+8+8)
 				{
 					std::cout << "entry len err " << dataLength << std::endl;
