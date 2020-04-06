@@ -38,7 +38,7 @@ grpc::Status RaftServiceImpl::RequestVote(grpc::ServerContext* context,const raf
     } else {
         term = rc->term;
         this->rc->mu.unlock();
-        LOGD("node.%lld term.%lld refuse vote c.id %u c.term %lld",this->rc->id,this->rc->term,req->candidateid(),req->term());
+        LOGI("node.%lld term.%lld refuse vote c.id %u c.term %lld",this->rc->id,this->rc->term,req->candidateid(),req->term());
     }
 
     // wait for
@@ -65,8 +65,8 @@ grpc::Status RaftServiceImpl::AppendEntries(grpc::ServerContext* context,const r
     bool success = false;
     MsgBack* mb = nullptr;
 
-    LOGD("AppendEntries1: %lld %lld %lld",req->term(),req->prevlogterm(),req->prevlogindex());
-    LOGD("AppendEntries2: %lld %d %d",rc->term,rc->lastLogTerm,rc->lastLogIndex);
+    LOGI("AppendEntries1: %lld %lld %lld",req->term(),req->prevlogterm(),req->prevlogindex());
+    LOGI("AppendEntries2: %lld %d %d",rc->term,rc->lastLogTerm,rc->lastLogIndex);
     this->rc->mu.lock();
     if (rc->term > req->term())
         term = rc->term;
@@ -152,7 +152,7 @@ grpc::Status RaftServiceImpl::Tran(grpc::ServerContext* context,const raftpb::Re
 
 
 void startRaftService(std::string address,RaftNode* rn,RaftCore* rc) {
-    LOGD("startRaftService:%s",address.c_str());
+    LOGI("startRaftService:%s",address.c_str());
     RaftServiceImpl service;
     service.rn = rn;
     service.rc = rc;

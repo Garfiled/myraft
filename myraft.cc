@@ -64,7 +64,7 @@ void tick(void* arg) {
 }
 
 void startElection(void* arg) {
-	LOGD("startElection");
+	LOGI("startElection");
 	RaftCore* rc =(RaftCore*)arg;
 	RaftMsg* msg = new RaftMsg(msg_vote);
 	rc->mu.lock();
@@ -161,18 +161,18 @@ int RaftNode::handleVote(RaftCore* rc,RaftMsg* msg)
 				voteForCnt++;
 			}
 		} else {
-			LOGD("requestVote: %d %s",s.error_code(), s.error_message().c_str());
+			LOGI("requestVote: %d %s",s.error_code(), s.error_message().c_str());
 		}
 	}
 
 	if (voteForCnt>this->peers.size()/2) {
 		if (rc->vote_back(msg->term,true,maxTerm)>0) {
-			LOGD("node.%lld become leader on term %lld",rc->id,msg->term);
+			LOGI("node.%lld become leader on term %lld",rc->id,msg->term);
 		} else {
 			rc->resetElectionTimer();	
 		}
 	} else {
-		LOGD("node.%lld vote failed on term %lld get %d",rc->id,msg->term,voteForCnt);
+		LOGI("node.%lld vote failed on term %lld get %d",rc->id,msg->term,voteForCnt);
 		rc->vote_back(msg->term,false,maxTerm);
 		rc->resetElectionTimer();
 	}
@@ -215,7 +215,7 @@ int RaftNode::handleProp(RaftCore* rc,RaftMsg* msg)
 					maxTerm = respAE.term();
 			}
 		} else {
-			LOGD("appendEntry: %d %s",s.error_code(),s.error_message().c_str());
+			LOGI("appendEntry: %d %s",s.error_code(),s.error_message().c_str());
 		}
 	}
 
@@ -240,7 +240,7 @@ int RaftNode::handleProp(RaftCore* rc,RaftMsg* msg)
 
 void startRaftNode(RaftNode* rn,RaftCore* rc) 
 {
-	LOGD("startRaftNode node.%lld", rc->id);
+	LOGI("startRaftNode node.%lld", rc->id);
 	while (true) 
 	{
 		std::vector<RaftMsg*> todo;
@@ -258,19 +258,19 @@ void startRaftNode(RaftNode* rn,RaftCore* rc)
 		for (auto msg : todo)
 		{
 			if (msg->msg_type == msg_prop) {
-				LOGD("node.%lld on term.%lld recv %lu",rc->id,rc->term,msg->ents.size());
+				LOGI("node.%lld on term.%lld recv %lu",rc->id,rc->term,msg->ents.size());
 
 				rn->handleProp(rc,msg);
 
 			} else if (msg->msg_type == msg_vote) {
-				LOGD("node.%lld start election on term %lld", msg->id,msg->term);
+				LOGI("node.%lld start election on term %lld", msg->id,msg->term);
 				rn->handleVote(rc,msg);
 			} else if (msg->msg_type == msg_hub) {
 				// printf("node.%lld send heartbeat\n", msg->id);
 
 				// appendEntries
 			} else {
-				LOGD("unsupport msgType:%d", msg->msg_type);
+				LOGI("unsupport msgType:%d", msg->msg_type);
 			}
 
 			delete msg;
@@ -341,13 +341,13 @@ void startWalWorker(RaftNode* rn,RaftCore* rc)
 int main(int argc, char const *argv[])
 {
 	if (argc<3) {
-		LOGD("need param %d",argc);
+		LOGI("need param %d",argc);
 		return 1;
 	}
 
 	int id = atoi(argv[1]);
 	if (id<=0) {
-		LOGD("id err %s",argv[1]);
+		LOGI("id err %s",argv[1]);
 		return 1;
 	}
 	std::vector<std::string> peerAddrs;
@@ -364,7 +364,7 @@ int main(int argc, char const *argv[])
 	std::vector<Entry*> es;
 	HardState hs = {0,0};
 	
-	LOGD("open wal...");
+	LOGI("open wal...");
 	std::string filename = std::string("./wal.") + std::string(argv[1]);
 	int ret = rn->wal.openWal(filename.c_str(),es,hs);
 	if (ret!=0) {
@@ -392,9 +392,6 @@ int main(int argc, char const *argv[])
 		rc->lastLogTerm = es.back()->term;
 		rc->lastLogIndex = es.back()->index;
 	}
-
-	// std::cout << "start raftcore:" << rc->term << " " << rc->voteFor << std::endl; 
-	// std::cout << "start raftcore:" << es.size() << std::endl; 
 
 	rc->election_timer = new Timer(rc->tm);
 	rc->election_timer->start(startElection,2000, Timer::TimerType::ONCE,rc);
