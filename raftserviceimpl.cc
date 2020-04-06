@@ -5,6 +5,7 @@
 #include "raftserviceimpl.h"
 #include "proto/raftpb.grpc.pb.h"
 #include "raft.h"
+#include "logutils.h"
 
 grpc::Status RaftServiceImpl::RequestVote(grpc::ServerContext* context,const raftpb::ReqVote* req,raftpb::RespVote* reply)
 {
@@ -16,8 +17,6 @@ grpc::Status RaftServiceImpl::RequestVote(grpc::ServerContext* context,const raf
     if (rc->state == Follower && (rc->voteFor==0 || rc->voteFor == req->candidateid()) && req->term()>=rc->term 
         && req->lastlogterm()>=rc->lastLogTerm && req->lastlogindex()>=rc->lastLogIndex) {
         
-        rc->resetElectionTimer();
-
         rc->voteFor = req->candidateid();
         rc->term = req->term();
         rc->leader = 0;
@@ -30,13 +29,17 @@ grpc::Status RaftServiceImpl::RequestVote(grpc::ServerContext* context,const raf
         msg->back = mb;
 
         rc->msg_wal_vec.push_back(msg);
+        this->rc->mu.unlock();
+        this->rc->msg_wal_cv.notify_one();
+
+        term = rc->term;
+        rc->resetElectionTimer();
 
     } else {
-        printf("node.%lld term.%lld refuse vote c.id %u c.term %lld\n",this->rc->id,this->rc->term,req->candidateid(),req->term());
+        term = rc->term;
+        this->rc->mu.unlock();
+        LOGD("node.%lld term.%lld refuse vote c.id %u c.term %lld",this->rc->id,this->rc->term,req->candidateid(),req->term());
     }
-    term = rc->term;
-    this->rc->mu.unlock();
-
 
     // wait for
     if (mb) {
@@ -46,12 +49,12 @@ grpc::Status RaftServiceImpl::RequestVote(grpc::ServerContext* context,const raf
             voteGranted = true;
         }
         delete mb;
+
     }
 
     reply->set_term(term);
     reply->set_votegranted(voteGranted);
 
-    std::cout << "RequestVote func end" << std::endl;
     return grpc::Status::OK;
 
 }
@@ -62,6 +65,8 @@ grpc::Status RaftServiceImpl::AppendEntries(grpc::ServerContext* context,const r
     bool success = false;
     MsgBack* mb = nullptr;
 
+    LOGD("AppendEntries1: %lld %lld %lld",req->term(),req->prevlogterm(),req->prevlogindex());
+    LOGD("AppendEntries2: %lld %d %d",rc->term,rc->lastLogTerm,rc->lastLogIndex);
     this->rc->mu.lock();
     if (rc->term > req->term())
         term = rc->term;
@@ -147,7 +152,7 @@ grpc::Status RaftServiceImpl::Tran(grpc::ServerContext* context,const raftpb::Re
 
 
 void startRaftService(std::string address,RaftNode* rn,RaftCore* rc) {
-    std::cout << "startRaftService:" << address << std::endl;
+    LOGD("startRaftService:%s",address.c_str());
     RaftServiceImpl service;
     service.rn = rn;
     service.rc = rc;

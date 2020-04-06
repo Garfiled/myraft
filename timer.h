@@ -81,5 +81,7 @@ inline void  Timer::start(Func fun, unsigned int interval, TimerType timetpe,voi
 	manager_.add_timer(this);
 	timerType_= timetpe;
 }
+
+char* getTimeStr111();
  
 #endif

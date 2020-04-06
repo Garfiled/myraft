@@ -9,6 +9,7 @@
 
 #include "timer.h"
 #include "raft.h"
+#include "logutils.h"
 
 int RaftCore::propose(Entry* e) {
 	if (e==nullptr)
@@ -63,7 +64,7 @@ void tick(void* arg) {
 }
 
 void startElection(void* arg) {
-	std::cout << "startElection ..." << std::endl;
+	LOGD("startElection");
 	RaftCore* rc =(RaftCore*)arg;
 	RaftMsg* msg = new RaftMsg(msg_vote);
 	rc->mu.lock();
@@ -82,7 +83,6 @@ void startElection(void* arg) {
 	int size = rc->msg_wal_vec.size();
 	rc->mu.unlock();
 	rc->msg_wal_cv.notify_one();
-	std::cout << "startElection func end :" << size << std::endl;
 }
 
 
@@ -106,7 +106,7 @@ RaftMsg* RaftCore::makePropMsg(Entry* e)
 
 void RaftCore::resetElectionTimer()
 {
-	this->tm.reset_timer(this->election_timer,rand()%1000+1000);
+	this->tm.reset_timer(this->election_timer,rand()%1000+5000);
 
 }
 
@@ -161,18 +161,18 @@ int RaftNode::handleVote(RaftCore* rc,RaftMsg* msg)
 				voteForCnt++;
 			}
 		} else {
-			std::cout << "requestVote:" << s.error_code() << ": " << s.error_message() << std::endl;
+			LOGD("requestVote: %d %s",s.error_code(), s.error_message().c_str());
 		}
 	}
 
 	if (voteForCnt>this->peers.size()/2) {
 		if (rc->vote_back(msg->term,true,maxTerm)>0) {
-			printf("node.%lld become leader on term %lld\n",rc->id,msg->term);
+			LOGD("node.%lld become leader on term %lld",rc->id,msg->term);
 		} else {
 			rc->resetElectionTimer();	
 		}
 	} else {
-		printf("node.%lld vote failed on term %lld get %d\n",rc->id,msg->term,voteForCnt);
+		LOGD("node.%lld vote failed on term %lld get %d",rc->id,msg->term,voteForCnt);
 		rc->vote_back(msg->term,false,maxTerm);
 		rc->resetElectionTimer();
 	}
@@ -195,14 +195,18 @@ int RaftNode::handleProp(RaftCore* rc,RaftMsg* msg)
 		reqAE.set_leaderid(msg->id);
 		reqAE.set_prevlogterm(msg->log_term);
 		reqAE.set_prevlogindex(msg->log_index);
-		// reqAE.entries.push_back(msg->ents);
+
+		for (auto e : msg->ents)
+		{
+			auto pbEntry = reqAE.add_entries();
+			pbEntry->set_term(e->term);
+			pbEntry->set_index(e->index);
+			pbEntry->set_record(e->record);
+		}
 
 		raftpb::RespAppendEntry respAE;
-		std::cout << "AppendEntries call..." << std::endl;
 		grpc::Status s = cc.second->stub_->AppendEntries(&ctx,reqAE,&respAE);
-		std::cout << "AppendEntries end..." << std::endl;
 		if (s.ok()) {
-			std::cout << "AppendEntries end..." << respAE.success() << " " << respAE.term() << std::endl;
 			if (respAE.success()) {
 				finishAE++;
 				cc.second->next_index = msg->log_index+msg->ents.size()+1;
@@ -211,7 +215,7 @@ int RaftNode::handleProp(RaftCore* rc,RaftMsg* msg)
 					maxTerm = respAE.term();
 			}
 		} else {
-			std::cout << "appendEntry:" << s.error_code() << ": " << s.error_message() << std::endl;
+			LOGD("appendEntry: %d %s",s.error_code(),s.error_message().c_str());
 		}
 	}
 
@@ -236,7 +240,7 @@ int RaftNode::handleProp(RaftCore* rc,RaftMsg* msg)
 
 void startRaftNode(RaftNode* rn,RaftCore* rc) 
 {
-	printf("startRaftNode node.%lld\n", rc->id);
+	LOGD("startRaftNode node.%lld", rc->id);
 	while (true) 
 	{
 		std::vector<RaftMsg*> todo;
@@ -251,23 +255,22 @@ void startRaftNode(RaftNode* rn,RaftCore* rc)
 			}
 		}
 
-		std::cout << "node recv:" << todo.size() << std::endl;
 		for (auto msg : todo)
 		{
 			if (msg->msg_type == msg_prop) {
-				printf("node.%lld on term.%lld recv %lu\n",rc->id,rc->term,msg->ents.size());
+				LOGD("node.%lld on term.%lld recv %lu",rc->id,rc->term,msg->ents.size());
 
 				rn->handleProp(rc,msg);
 
 			} else if (msg->msg_type == msg_vote) {
-				printf("node.%lld start election on term %lld\n", msg->id,msg->term);
+				LOGD("node.%lld start election on term %lld", msg->id,msg->term);
 				rn->handleVote(rc,msg);
 			} else if (msg->msg_type == msg_hub) {
 				// printf("node.%lld send heartbeat\n", msg->id);
 
 				// appendEntries
 			} else {
-				printf("unsupport msgType:%d\n", msg->msg_type);
+				LOGD("unsupport msgType:%d", msg->msg_type);
 			}
 
 			delete msg;
@@ -289,23 +292,15 @@ void startWalWorker(RaftNode* rn,RaftCore* rc)
 	{
 		std::vector<RaftMsg*> todo;
 		{
-			std::cout << "debug110" << std::endl;
 			std::unique_lock<std::mutex> lk(rc->mu);
-						std::cout << "debug111" << std::endl;
-
 			if (rc->msg_wal_vec.size()==0) {
-							std::cout << "debug112" << std::endl;
-
 				rc->msg_wal_cv.wait(lk);
-							std::cout << "debug113" << std::endl;
-
 				continue;
 			}	
 			todo = rc->msg_wal_vec;
 			rc->msg_wal_vec.clear();
 		}
 		
-		std::cout << "wal_worker recv:" << todo.size() << std::endl;
 		for (auto msg : todo)
 		{
 			if (msg->msg_type == msg_vote || msg->msg_type == msg_prop) {
@@ -317,7 +312,6 @@ void startWalWorker(RaftNode* rn,RaftCore* rc)
 
 		int syncState = fsync(rn->wal.fd_);
 
-		std::cout << "wal_worker sync:" << syncState << std::endl;
 		std::vector<RaftMsg*> todo2;
 		for (auto msg : todo)
 		{
@@ -337,7 +331,6 @@ void startWalWorker(RaftNode* rn,RaftCore* rc)
 			if (size == todo2.size())
 				rn->msg_node_cv.notify_one();
 		}
-		std::cout << "wal_worker finish loop" << std::endl;
 	}
 
 }
@@ -348,13 +341,13 @@ void startWalWorker(RaftNode* rn,RaftCore* rc)
 int main(int argc, char const *argv[])
 {
 	if (argc<3) {
-		std::cout << "need param " << argc << std::endl;
+		LOGD("need param %d",argc);
 		return 1;
 	}
 
 	int id = atoi(argv[1]);
 	if (id<=0) {
-		std::cout << "id err " << argv[1] << std::endl;
+		LOGD("id err %s",argv[1]);
 		return 1;
 	}
 	std::vector<std::string> peerAddrs;
@@ -363,13 +356,15 @@ int main(int argc, char const *argv[])
 	}
 
 
+	srand((unsigned)time(NULL)); 
+
 	RaftNode* rn = new RaftNode();
 
 	// 初始化状态
 	std::vector<Entry*> es;
 	HardState hs = {0,0};
 	
-	std::cout << "open wal..." << std::endl;
+	LOGD("open wal...");
 	std::string filename = std::string("./wal.") + std::string(argv[1]);
 	int ret = rn->wal.openWal(filename.c_str(),es,hs);
 	if (ret!=0) {

@@ -175,3 +175,10 @@ unsigned long long TimerManager::get_current_millisecs()
 	return ret * 1000 + tv.tv_usec / 1000;
 #endif
 }
+
+char* getTimeStr111() 
+{
+	time_t nowtime;
+ 	nowtime = time(NULL);
+ 	return ctime(&nowtime);
+}
