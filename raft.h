@@ -127,6 +127,8 @@ public:
 	std::condition_variable msg_wal_cv;
 
 	Timer* election_timer;
+	Timer* hub_ticker;
+
 	TimerManager tm;
 };
 
@@ -142,5 +144,6 @@ public:
 
 	int handleVote(RaftCore*,RaftMsg*);
 	int handleProp(RaftCore*,RaftMsg*);
+	int handleHub(RaftCore*,RaftMsg*);
 	void reset(RaftCore*);
 };

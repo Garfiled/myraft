@@ -17,11 +17,13 @@ Timer::~Timer()
  
 void Timer::stop()
 {
+	manager_.mu.lock();
 	if (m_nHeapIndex != -1)
 	{
 		manager_.remove_timer(this);
 		m_nHeapIndex = -1;
 	}
+	manager_.mu.unlock();
 }
 
 void Timer::on_timer(unsigned long long now)
@@ -54,7 +56,8 @@ void TimerManager::add_timer(Timer* timer)
 void TimerManager::reset_timer(Timer* timer,int interval)
 {
 	this->mu.lock();
-	remove_timer(timer);
+	if (timer->m_nHeapIndex != -1)
+		remove_timer(timer);
 
 	timer->m_nExpires = TimerManager::get_current_millisecs()+interval;
 	timer->m_nInterval =interval;
@@ -174,11 +177,4 @@ unsigned long long TimerManager::get_current_millisecs()
 	unsigned long long ret = tv.tv_sec;
 	return ret * 1000 + tv.tv_usec / 1000;
 #endif
-}
-
-char* getTimeStr111() 
-{
-	time_t nowtime;
- 	nowtime = time(NULL);
- 	return ctime(&nowtime);
 }

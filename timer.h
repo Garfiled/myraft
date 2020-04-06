@@ -18,6 +18,8 @@ public:
 	//启动一个定时器
 	template<typename Func>
     void   start (Func func, unsigned int ms, TimerType type,void* _arg);
+    template<typename Func>
+    void   create (Func func, unsigned int ms, TimerType type,void* _arg);
     //终止一个定时器
 	void   stop ();
 private:
@@ -82,6 +84,13 @@ inline void  Timer::start(Func fun, unsigned int interval, TimerType timetpe,voi
 	timerType_= timetpe;
 }
 
-char* getTimeStr111();
- 
+template <typename Func>
+inline void  Timer::create(Func fun, unsigned int interval, TimerType timetpe,void* _arg)
+{
+	m_nInterval = interval;
+	m_timerfunc = fun;
+	arg = _arg;
+	m_nExpires = interval + TimerManager::get_current_millisecs();
+	timerType_= timetpe;
+}
 #endif

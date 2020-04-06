@@ -57,8 +57,9 @@ void tick(void* arg) {
 		RaftMsg* m = new RaftMsg(msg_hub);
 		m->term = rc->term;
 		rc->msg_wal_vec.push_back(m);
+	} else {
+		rc->hub_ticker->stop();
 	}
-	int size = rc->msg_wal_vec.size();
 	rc->mu.unlock();
 	rc->msg_wal_cv.notify_one();
 }
@@ -122,6 +123,7 @@ int RaftCore::vote_back(int happenTerm,bool win,int peerTerm) {
 		RaftMsg* msg = this->makePropMsg(e);
 		this->msg_wal_vec.push_back(msg);
 		int size = this->msg_wal_vec.size();
+		this->tm.reset_timer(this->hub_ticker,400);
 		this->mu.unlock();
 		this->msg_wal_cv.notify_one();
 		becomeLeader = 1;
@@ -238,6 +240,65 @@ int RaftNode::handleProp(RaftCore* rc,RaftMsg* msg)
 	return 0;
 }
 
+int RaftNode::handleHub(RaftCore* rc,RaftMsg* msg)
+{
+	for (auto &cc : this->peers)
+	{
+		if (cc.first == msg->id)
+			continue;
+
+		uint64_t prevLogTerm;
+		uint64_t prevLogIndex;
+		std::vector<Entry*> todo_ents;
+		if (msg->log_index == 0||cc.second->next_index==0||cc.second->next_index>msg->log_index) {
+			prevLogTerm = msg->log_term;
+			prevLogIndex = msg->log_index;
+		} else {
+			if (cc.second->next_index>1) {
+				prevLogTerm = rc->ents[cc.second->next_index-2]->term;
+				prevLogIndex = rc->ents[cc.second->next_index-2]->index;
+			} else {
+				prevLogTerm = 0;
+				prevLogIndex = 0;
+			}
+			// ents
+			copy(rc->ents.begin()+cc.second->next_index-1,rc->ents.end(),todo_ents.begin());
+		}
+
+		grpc::ClientContext ctx;
+		raftpb::ReqAppendEntry reqAE;
+		reqAE.set_term(msg->term);
+		reqAE.set_leaderid(msg->id);
+		reqAE.set_prevlogterm(prevLogTerm);
+		reqAE.set_prevlogindex(prevLogIndex);
+
+		for (auto e : todo_ents)
+		{
+			auto pbEntry = reqAE.add_entries();
+			pbEntry->set_term(e->term);
+			pbEntry->set_index(e->index);
+			pbEntry->set_record(e->record);
+		}
+
+		raftpb::RespAppendEntry respAE;
+		grpc::Status s = cc.second->stub_->AppendEntries(&ctx,reqAE,&respAE);
+		if (s.ok()) {
+			if (respAE.success()) {
+				cc.second->next_index = prevLogIndex + todo_ents.size() + 1;
+			} else {
+				if (respAE.term()>msg->term) {
+					rc->vote_back(msg->term,false,respAE.term());
+				} else {
+					cc.second->next_index =prevLogIndex;
+				}
+			}
+		} else {
+			LOGI("hub: %d %s",s.error_code(),s.error_message().c_str());
+		}
+	}
+	return 0;
+}
+
 void startRaftNode(RaftNode* rn,RaftCore* rc) 
 {
 	LOGI("startRaftNode node.%lld", rc->id);
@@ -266,9 +327,7 @@ void startRaftNode(RaftNode* rn,RaftCore* rc)
 				LOGI("node.%lld start election on term %lld", msg->id,msg->term);
 				rn->handleVote(rc,msg);
 			} else if (msg->msg_type == msg_hub) {
-				// printf("node.%lld send heartbeat\n", msg->id);
-
-				// appendEntries
+				rn->handleHub(rc,msg);
 			} else {
 				LOGI("unsupport msgType:%d", msg->msg_type);
 			}
@@ -301,16 +360,19 @@ void startWalWorker(RaftNode* rn,RaftCore* rc)
 			rc->msg_wal_vec.clear();
 		}
 		
+		bool walEvent = false;
 		for (auto msg : todo)
 		{
 			if (msg->msg_type == msg_vote || msg->msg_type == msg_prop) {
 				std::string rec;
 				msg->encoder(rec);
 				rn->wal.writeRecord(rec);
+
+				walEvent = true;
 			}
 		}
-
-		int syncState = fsync(rn->wal.fd_);
+		if (walEvent)
+			int syncState = fsync(rn->wal.fd_);
 
 		std::vector<RaftMsg*> todo2;
 		for (auto msg : todo)
@@ -396,16 +458,14 @@ int main(int argc, char const *argv[])
 	rc->election_timer = new Timer(rc->tm);
 	rc->election_timer->start(startElection,2000, Timer::TimerType::ONCE,rc);
 	
+	rc->hub_ticker = new Timer(rc->tm);
+	rc->hub_ticker->create(tick,400, Timer::TimerType::CIRCLE,rc);
+
+
 	std::thread sysmon_worker(sysmon,rc);
 	std::thread wal_worker(startWalWorker,rn,rc);
 	std::thread node_worker(startRaftNode,rn,rc);
 	std::thread node_service(startRaftService,peerAddrs[id-1],rn,rc);
-
-
-	// Timer rc_ticker(tm);
-	// rc_ticker.start(tick,400, Timer::TimerType::CIRCLE,rc);
-
-
 
 	sysmon_worker.join();
 	node_worker.join();
