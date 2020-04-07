@@ -68,8 +68,8 @@ grpc::Status RaftServiceImpl::AppendEntries(grpc::ServerContext* context,const r
     bool success = false;
     MsgBack* mb = nullptr;
 
-    // LOGI("AppendEntries1: %lld %lld %lld",req->term(),req->prevlogterm(),req->prevlogindex());
-    // LOGI("AppendEntries2: %lld %d %d",rc->term,rc->lastLogTerm,rc->lastLogIndex);
+    LOGD("AppendEntries1: %lld %lld %lld",req->term(),req->prevlogterm(),req->prevlogindex());
+    LOGD("AppendEntries2: %lld %d %d",rc->term,rc->lastLogTerm,rc->lastLogIndex);
     this->rc->mu.lock();
     if (rc->term > req->term())
         term = rc->term;
@@ -78,9 +78,6 @@ grpc::Status RaftServiceImpl::AppendEntries(grpc::ServerContext* context,const r
         rc->term = req->term();
         rc->leader = req->leaderid();
         rc->state = Follower;
-
-        // reset election timeout
-        rc->resetElectionTimer();
 
         if (rc->lastLogTerm == req->prevlogterm() && rc->lastLogIndex==req->prevlogindex()) {
             if (req->entries().size()>0) {              
@@ -132,8 +129,12 @@ grpc::Status RaftServiceImpl::AppendEntries(grpc::ServerContext* context,const r
     }
     term = rc->term;
     this->rc->mu.unlock();
-
-    if (mb != nullptr) {
+    // reset election timeout
+    rc->resetElectionTimer();
+    if (mb)
+        rc->msg_wal_cv.notify_one();
+    
+    if (mb) {
         std::unique_lock<std::mutex> lk(mb->mu);
         mb->cv.wait(lk);
         if (mb->err==0) {

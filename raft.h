@@ -109,6 +109,7 @@ public:
 	void push_entry(Entry* e);
 	RaftMsg* makePropMsg(Entry* e);
 	void resetElectionTimer();
+	void resetHeartBeatTick();
 
 	int64_t id;
 	RaftState state;

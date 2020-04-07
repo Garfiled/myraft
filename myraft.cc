@@ -54,17 +54,20 @@ void tick(void* arg) {
 	RaftCore* rc =(RaftCore*)arg;
 	rc->mu.lock();
 	if (rc->state == Leader) {
+		LOGD("node.%lld leader tick",rc->id);
 		RaftMsg* m = new RaftMsg(msg_hub);
 		m->term = rc->term;
 		m->id = rc->id;
 		m->log_term = rc->lastLogTerm;
 		m->log_index = rc->lastLogIndex;
 		rc->msg_wal_vec.push_back(m);
+		rc->mu.unlock();
+		rc->msg_wal_cv.notify_one();
 	} else {
+		rc->mu.unlock();
 		rc->hub_ticker->stop();
 	}
-	rc->mu.unlock();
-	rc->msg_wal_cv.notify_one();
+	
 }
 
 void startElection(void* arg) {
@@ -114,6 +117,11 @@ void RaftCore::resetElectionTimer()
 
 }
 
+void RaftCore::resetHeartBeatTick()
+{
+	this->tm.reset_timer(this->hub_ticker,400);
+}
+
 int RaftCore::vote_back(int happenTerm,bool win,int peerTerm) {
 	int becomeLeader = 0;
 	this->mu.lock();
@@ -126,9 +134,9 @@ int RaftCore::vote_back(int happenTerm,bool win,int peerTerm) {
 		RaftMsg* msg = this->makePropMsg(e);
 		this->msg_wal_vec.push_back(msg);
 		int size = this->msg_wal_vec.size();
-		this->tm.reset_timer(this->hub_ticker,400);
 		this->mu.unlock();
 		this->msg_wal_cv.notify_one();
+		this->resetHeartBeatTick();
 		becomeLeader = 1;
 	} else {
 		this->state = Follower;
@@ -137,6 +145,7 @@ int RaftCore::vote_back(int happenTerm,bool win,int peerTerm) {
 		if (this->term < peerTerm)
 			this->term = peerTerm;
 		this->mu.unlock();
+		this->resetElectionTimer();
 	}
 	return becomeLeader;
 }
@@ -173,13 +182,10 @@ int RaftNode::handleVote(RaftCore* rc,RaftMsg* msg)
 	if (voteForCnt>this->peers.size()/2) {
 		if (rc->vote_back(msg->term,true,maxTerm)>0) {
 			LOGI("node.%lld become leader on term %lld",rc->id,msg->term);
-		} else {
-			rc->resetElectionTimer();	
 		}
 	} else {
 		LOGI("node.%lld vote failed on term %lld get %d",rc->id,msg->term,voteForCnt);
 		rc->vote_back(msg->term,false,maxTerm);
-		rc->resetElectionTimer();
 	}
 
 	return 0;
@@ -210,7 +216,9 @@ int RaftNode::handleProp(RaftCore* rc,RaftMsg* msg)
 		}
 
 		raftpb::RespAppendEntry respAE;
+		LOGD("AppendEntries call: %lu",msg->ents.size());
 		grpc::Status s = cc.second->stub_->AppendEntries(&ctx,reqAE,&respAE);
+		LOGD("AppendEntries call end: %lu",msg->ents.size());
 		if (s.ok()) {
 			if (respAE.success()) {
 				finishAE++;
@@ -283,7 +291,7 @@ int RaftNode::handleHub(RaftCore* rc,RaftMsg* msg)
 		}
 
 		raftpb::RespAppendEntry respAE;
-		// LOGI("hub AE: id:%lld term:%lld log_term:%lld log_index:%lld",msg->id,msg->term,msg->log_term,msg->log_index);
+		LOGD("hub AE: id:%lld term:%lld log_term:%lld log_index:%lld",msg->id,msg->term,msg->log_term,msg->log_index);
 		grpc::Status s = cc.second->stub_->AppendEntries(&ctx,reqAE,&respAE);
 		if (s.ok()) {
 			if (respAE.success()) {
@@ -309,15 +317,18 @@ void startRaftNode(RaftNode* rn,RaftCore* rc)
 	{
 		std::vector<RaftMsg*> todo;
 		{
+			LOGD("node_worker recv: loop");
 			std::unique_lock<std::mutex> lk(rn->msg_node_mu);
+			LOGD("node_worker recv: lk");
 			if (rn->msg_node_vec.size()==0) {
+				LOGD("node_worker recv: wait");
 				rn->msg_node_cv.wait(lk);
 				continue;
-			} else {
-				todo = rn->msg_node_vec;
-				rn->msg_node_vec.clear();
 			}
+			todo = rn->msg_node_vec;
+			rn->msg_node_vec.clear();		
 		}
+		LOGD("node_worker recv: event_num:%lu",todo.size());
 
 		for (auto msg : todo)
 		{
@@ -337,8 +348,7 @@ void startRaftNode(RaftNode* rn,RaftCore* rc)
 
 			delete msg;
 		}
-
-
+		LOGD("node_worker recv: loop end");
 	}
 
 }
@@ -363,6 +373,7 @@ void startWalWorker(RaftNode* rn,RaftCore* rc)
 			rc->msg_wal_vec.clear();
 		}
 		
+		LOGD("wal_worker: recv event_num %lu",todo.size());
 		bool walEvent = false;
 		for (auto msg : todo)
 		{
@@ -388,13 +399,12 @@ void startWalWorker(RaftNode* rn,RaftCore* rc)
 			}
 		}
 
+		LOGD("wal_worker: send2node event_num %lu",todo2.size());
 		if (todo2.size()>0) {
 			rn->msg_node_mu.lock();
 			rn->msg_node_vec.insert(rn->msg_node_vec.end(), todo2.begin(), todo2.end());
-			int size = rn->msg_node_vec.size();
 			rn->msg_node_mu.unlock();
-			if (size == todo2.size())
-				rn->msg_node_cv.notify_one();
+			rn->msg_node_cv.notify_one();
 		}
 	}
 
@@ -462,6 +472,7 @@ int main(int argc, char const *argv[])
 	if (es.size()>0) {
 		rc->lastLogTerm = es.back()->term;
 		rc->lastLogIndex = es.back()->index;
+		rc->ents = es;
 	}
 
 	rc->election_timer = new Timer(rc->tm);
