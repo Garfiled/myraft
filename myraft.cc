@@ -104,6 +104,8 @@ RaftMsg* RaftCore::makePropMsg(Entry* e)
 	m->log_index = this->lastLogIndex;
 	m->ents.push_back(e);
 
+	this->ents.push_back(e);
+
 	this->lastLogTerm = e->term;
 	this->lastLogIndex = e->index;
 	return m;
@@ -244,6 +246,11 @@ int RaftNode::handleProp(RaftCore* rc,RaftMsg* msg)
 		rc->vote_back(msg->term,false,maxTerm);
 	}
 
+	rc->mu.lock();
+	LOGD("rc: node.%lld term %lld entry %lu first %d last %d",rc->id,rc->term,rc->ents.size(),rc->ents.front()->index,rc->ents.back()->index);
+	
+	rc->mu.unlock();
+	
 	return 0;
 }
 
@@ -254,38 +261,40 @@ int RaftNode::handleHub(RaftCore* rc,RaftMsg* msg)
 		if (cc.first == msg->id)
 			continue;
 
-		uint64_t prevLogTerm;
-		uint64_t prevLogIndex;
+		uint64_t prevLogTerm = 0;
+		uint64_t prevLogIndex = 0;
 		std::vector<Entry*> todo_ents;
 		if (msg->log_index == 0||cc.second->next_index==0||cc.second->next_index>msg->log_index) {
 			prevLogTerm = msg->log_term;
 			prevLogIndex = msg->log_index;
+			todo_ents = msg->ents;
 		} else {
-			bool entryMatch = false;
 			rc->mu.lock();
 			if (rc->ents.size()==0) {
 				prevLogTerm = msg->log_term;
 				prevLogIndex = msg->log_index;
-			} else if (cc.second->next_index-1>rc->ents.back()->index) {
+			} else if (cc.second->next_index>rc->ents.back()->index) {
 				prevLogTerm = msg->log_term;
 				prevLogIndex = msg->log_index;
-			} else if (cc.second->next_index-1>rc->ents.front()->index) {
+			} else if (cc.second->next_index>rc->ents.front()->index) {
 				prevLogTerm = rc->ents[cc.second->next_index-1-rc->ents.front()->index]->term;
 				prevLogIndex = rc->ents[cc.second->next_index-1-rc->ents.front()->index]->index;
-				entryMatch = true;
+
+				for (int i=cc.second->next_index-rc->ents.front()->index;i<msg->log_index-rc->ents.front()->index;i++)
+				{
+					todo_ents.push_back(rc->ents[i]);
+				}
 			} else {
-				if (cc.second->next_index-1==1) {
+				if (cc.second->next_index == rc->ents.front()->index) {
 					prevLogTerm = 0;
 					prevLogIndex = 0;
-					entryMatch = true;
+					todo_ents = rc->ents;
 				} else {
 					LOGI("entry index not match: need %lld but begin with %d",cc.second->next_index-1,rc->ents.front()->index)
 					prevLogTerm = rc->ents.front()->term;
 					prevLogIndex = rc->ents.front()->index;
 				}
 			}
-			if (entryMatch)
-				copy(rc->ents.begin()+cc.second->next_index-1-rc->ents.front()->index,rc->ents.end(),todo_ents.begin());
 			rc->mu.unlock();
 		}
 
@@ -305,7 +314,6 @@ int RaftNode::handleHub(RaftCore* rc,RaftMsg* msg)
 		}
 
 		raftpb::RespAppendEntry respAE;
-		LOGD("hub AE: id:%lld term:%lld log_term:%lld log_index:%lld",msg->id,msg->term,msg->log_term,msg->log_index);
 		grpc::Status s = cc.second->stub_->AppendEntries(&ctx,reqAE,&respAE);
 		if (s.ok()) {
 			if (respAE.success()) {
@@ -314,7 +322,7 @@ int RaftNode::handleHub(RaftCore* rc,RaftMsg* msg)
 				if (respAE.term()>msg->term) {
 					rc->vote_back(msg->term,false,respAE.term());
 				} else {
-					cc.second->next_index =prevLogIndex;
+					cc.second->next_index = prevLogIndex;
 				}
 			}
 		} else {
@@ -331,18 +339,14 @@ void startRaftNode(RaftNode* rn,RaftCore* rc)
 	{
 		std::vector<RaftMsg*> todo;
 		{
-			LOGD("node_worker recv: loop");
 			std::unique_lock<std::mutex> lk(rn->msg_node_mu);
-			LOGD("node_worker recv: lk");
 			if (rn->msg_node_vec.size()==0) {
-				LOGD("node_worker recv: wait");
 				rn->msg_node_cv.wait(lk);
 				continue;
 			}
 			todo = rn->msg_node_vec;
 			rn->msg_node_vec.clear();		
 		}
-		LOGD("node_worker recv: event_num:%lu",todo.size());
 
 		for (auto msg : todo)
 		{
@@ -362,7 +366,6 @@ void startRaftNode(RaftNode* rn,RaftCore* rc)
 
 			delete msg;
 		}
-		LOGD("node_worker recv: loop end");
 	}
 
 }
@@ -387,7 +390,6 @@ void startWalWorker(RaftNode* rn,RaftCore* rc)
 			rc->msg_wal_vec.clear();
 		}
 		
-		LOGD("wal_worker: recv event_num %lu",todo.size());
 		bool walEvent = false;
 		for (auto msg : todo)
 		{
@@ -413,7 +415,6 @@ void startWalWorker(RaftNode* rn,RaftCore* rc)
 			}
 		}
 
-		LOGD("wal_worker: send2node event_num %lu",todo2.size());
 		if (todo2.size()>0) {
 			rn->msg_node_mu.lock();
 			rn->msg_node_vec.insert(rn->msg_node_vec.end(), todo2.begin(), todo2.end());
