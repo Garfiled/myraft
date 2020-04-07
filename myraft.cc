@@ -56,6 +56,9 @@ void tick(void* arg) {
 	if (rc->state == Leader) {
 		RaftMsg* m = new RaftMsg(msg_hub);
 		m->term = rc->term;
+		m->id = rc->id;
+		m->log_term = rc->lastLogTerm;
+		m->log_index = rc->lastLogIndex;
 		rc->msg_wal_vec.push_back(m);
 	} else {
 		rc->hub_ticker->stop();
@@ -107,7 +110,7 @@ RaftMsg* RaftCore::makePropMsg(Entry* e)
 
 void RaftCore::resetElectionTimer()
 {
-	this->tm.reset_timer(this->election_timer,rand()%1000+5000);
+	this->tm.reset_timer(this->election_timer,rand()%1000+1000);
 
 }
 
@@ -232,7 +235,6 @@ int RaftNode::handleProp(RaftCore* rc,RaftMsg* msg)
 		msg->back->err = err;
 		msg->back->cv.notify_one();
 	}
-
 	if (maxTerm>msg->term) {
 		rc->vote_back(msg->term,false,maxTerm);
 	}
@@ -281,6 +283,7 @@ int RaftNode::handleHub(RaftCore* rc,RaftMsg* msg)
 		}
 
 		raftpb::RespAppendEntry respAE;
+		// LOGI("hub AE: id:%lld term:%lld log_term:%lld log_index:%lld",msg->id,msg->term,msg->log_term,msg->log_index);
 		grpc::Status s = cc.second->stub_->AppendEntries(&ctx,reqAE,&respAE);
 		if (s.ok()) {
 			if (respAE.success()) {
@@ -438,9 +441,15 @@ int main(int argc, char const *argv[])
 	int startId = 1;
 	for (auto addr : peerAddrs)
 	{
-		auto c = new RaftClient(grpc::CreateChannel(addr, grpc::InsecureChannelCredentials()));
-		c->next_index = 0;
-		rn->peers[startId] = c;
+		RaftClient* client;
+		if (startId == id) {
+			client = new RaftClient();
+		} else {
+			client = new RaftClient(grpc::CreateChannel(addr, grpc::InsecureChannelCredentials()));
+
+		}
+		client->next_index = 0;
+		rn->peers[startId] = client;
 		startId++;
 	}
 
@@ -456,7 +465,7 @@ int main(int argc, char const *argv[])
 	}
 
 	rc->election_timer = new Timer(rc->tm);
-	rc->election_timer->start(startElection,2000, Timer::TimerType::ONCE,rc);
+	rc->election_timer->create(startElection,1000, Timer::TimerType::ONCE,rc);
 	
 	rc->hub_ticker = new Timer(rc->tm);
 	rc->hub_ticker->create(tick,400, Timer::TimerType::CIRCLE,rc);
@@ -467,10 +476,12 @@ int main(int argc, char const *argv[])
 	std::thread node_worker(startRaftNode,rn,rc);
 	std::thread node_service(startRaftService,peerAddrs[id-1],rn,rc);
 
-	sysmon_worker.join();
+	rc->resetElectionTimer();
+
 	node_worker.join();
 	node_service.join();
 	wal_worker.join();
+	sysmon_worker.join();
 
 	return 0;
 }

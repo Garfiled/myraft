@@ -25,8 +25,8 @@ public:
 
 class RaftClient {
 public:
-    RaftClient(std::shared_ptr<grpc::Channel> channel) : stub_(raftpb::raftService::NewStub(channel)) {}
-
+    RaftClient(std::shared_ptr<grpc::Channel> channel) : stub_(raftpb::raftService::NewStub(channel)) {};
+    RaftClient():stub_(nullptr){};
     std::unique_ptr<raftpb::raftService::Stub> stub_;
 
     uint64_t next_index;

@@ -6,6 +6,9 @@
 # include <sys/time.h>
 #endif
  
+
+#include "logutils.h"
+
 // Timer
 Timer::Timer(TimerManager& manager): manager_(manager), m_nHeapIndex(-1)
 {}
@@ -100,25 +103,28 @@ void TimerManager::detect_timers()
 	int delay = 0;
 	while (1) 
 	{
-		std::unique_lock<std::mutex> lk(this->mu);
-		if (this->heap_.empty())
+		Timer* timer;
+		unsigned long long now;
 		{
-			this->cv.wait(lk);
-			continue;
+			std::unique_lock<std::mutex> lk(this->mu);
+			if (this->heap_.empty())
+			{
+				this->cv.wait(lk);
+				continue;
+			}
+
+			now = get_current_millisecs();
+
+			delay = heap_[0].time-now; 
+
+			if (delay>0) {
+				this->cv.wait_for(lk,std::chrono::milliseconds(delay));
+				continue;
+			}
+
+			timer = heap_[0].timer;
+			remove_timer(timer);
 		}
-
-		unsigned long long now = get_current_millisecs();
-
-		delay = heap_[0].time-now; 
-
-		if (delay>0) {
-			this->cv.wait_for(lk,std::chrono::milliseconds(delay));
-			continue;
-		}
-
-		Timer* timer = heap_[0].timer;
-		remove_timer(timer);
-		lk.unlock();
 
 		this->cv.notify_one();
 
