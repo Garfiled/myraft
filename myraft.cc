@@ -29,7 +29,7 @@ int RaftCore::propose(Entry* e) {
 	auto mb = new MsgBack();
 	msg->back = mb;
 	this->msg_wal_vec.push_back(msg);
-	int size = this->msg_wal_vec.size();
+
 	this->mu.unlock();
 	this->msg_wal_cv.notify_one();
 
@@ -66,8 +66,7 @@ void tick(void* arg) {
 	} else {
 		rc->mu.unlock();
 		rc->hub_ticker->stop();
-	}
-	
+	}	
 }
 
 void startElection(void* arg) {
@@ -87,7 +86,6 @@ void startElection(void* arg) {
 	msg->log_index = rc->lastLogIndex;
 
 	rc->msg_wal_vec.push_back(msg);
-	int size = rc->msg_wal_vec.size();
 	rc->mu.unlock();
 	rc->msg_wal_cv.notify_one();
 }
@@ -129,11 +127,10 @@ int RaftCore::vote_back(int happenTerm,bool win,int peerTerm) {
 		this->state = Leader;
 		this->leader = id;
 
-		// 生成一条noop entry 防止幽灵事件
+		// 生成一条noop entry 防止幽灵日志事件
 		auto e = new Entry();
 		RaftMsg* msg = this->makePropMsg(e);
 		this->msg_wal_vec.push_back(msg);
-		int size = this->msg_wal_vec.size();
 		this->mu.unlock();
 		this->msg_wal_cv.notify_one();
 		this->resetHeartBeatTick();
@@ -260,19 +257,27 @@ int RaftNode::handleHub(RaftCore* rc,RaftMsg* msg)
 		uint64_t prevLogTerm;
 		uint64_t prevLogIndex;
 		std::vector<Entry*> todo_ents;
-		if (msg->log_index == 0||cc.second->next_index==0||cc.second->next_index>msg->log_index) {
+		if (msg->log_index == 0||cc.second->next_index==0||cc.second->next_index>msg->log_index || rc->ents.size()==0) {
 			prevLogTerm = msg->log_term;
 			prevLogIndex = msg->log_index;
 		} else {
-			if (cc.second->next_index>1) {
-				prevLogTerm = rc->ents[cc.second->next_index-2]->term;
-				prevLogIndex = rc->ents[cc.second->next_index-2]->index;
+			bool entryMatch = true;
+			if (cc.second->next_index-1>rc->ents.front()->index) {
+					prevLogTerm = rc->ents[cc.second->next_index-1-rc->ents.front()->index]->term;
+					prevLogIndex = rc->ents[cc.second->next_index-1-rc->ents.front()->index]->index;
 			} else {
-				prevLogTerm = 0;
-				prevLogIndex = 0;
+				if (cc.second->next_index-1==1) {
+					prevLogTerm = 0;
+					prevLogIndex = 0;
+				} else {
+					LOGI("entry index not match: need %lld but begin with %d",cc.second->next_index-1,rc->ents.front()->index)
+					prevLogTerm = rc->ents.front()->term;
+					prevLogIndex = rc->ents.front()->index;
+					entryMatch = false;
+				}
 			}
-			// ents
-			copy(rc->ents.begin()+cc.second->next_index-1,rc->ents.end(),todo_ents.begin());
+			if (entryMatch)
+				copy(rc->ents.begin()+cc.second->next_index-1-rc->ents.front()->index,rc->ents.end(),todo_ents.begin());
 		}
 
 		grpc::ClientContext ctx;
@@ -333,7 +338,7 @@ void startRaftNode(RaftNode* rn,RaftCore* rc)
 		for (auto msg : todo)
 		{
 			if (msg->msg_type == msg_prop) {
-				LOGI("node.%lld on term.%lld recv %lu",rc->id,rc->term,msg->ents.size());
+				LOGD("node.%lld on term.%lld recv %lu",rc->id,rc->term,msg->ents.size());
 
 				rn->handleProp(rc,msg);
 
@@ -447,6 +452,14 @@ int main(int argc, char const *argv[])
 		return 1;
 	}
 
+	LOGI("wal state: term %lld voteFor %lld",hs.term,hs.voteFor);
+	int firstIndex = 0;
+	int lastIndex = 0;
+	if (es.size()>0) {
+		firstIndex = es.front()->index;
+		lastIndex = es.back()->index;
+	}
+	LOGI("wal entry: firstIndex %d lastIndex %d",firstIndex,lastIndex);
 
 	int startId = 1;
 	for (auto addr : peerAddrs)
