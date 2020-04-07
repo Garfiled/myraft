@@ -257,27 +257,36 @@ int RaftNode::handleHub(RaftCore* rc,RaftMsg* msg)
 		uint64_t prevLogTerm;
 		uint64_t prevLogIndex;
 		std::vector<Entry*> todo_ents;
-		if (msg->log_index == 0||cc.second->next_index==0||cc.second->next_index>msg->log_index || rc->ents.size()==0) {
+		if (msg->log_index == 0||cc.second->next_index==0||cc.second->next_index>msg->log_index) {
 			prevLogTerm = msg->log_term;
 			prevLogIndex = msg->log_index;
 		} else {
-			bool entryMatch = true;
-			if (cc.second->next_index-1>rc->ents.front()->index) {
-					prevLogTerm = rc->ents[cc.second->next_index-1-rc->ents.front()->index]->term;
-					prevLogIndex = rc->ents[cc.second->next_index-1-rc->ents.front()->index]->index;
+			bool entryMatch = false;
+			rc->mu.lock();
+			if (rc->ents.size()==0) {
+				prevLogTerm = msg->log_term;
+				prevLogIndex = msg->log_index;
+			} else if (cc.second->next_index-1>rc->ents.back()->index) {
+				prevLogTerm = msg->log_term;
+				prevLogIndex = msg->log_index;
+			} else if (cc.second->next_index-1>rc->ents.front()->index) {
+				prevLogTerm = rc->ents[cc.second->next_index-1-rc->ents.front()->index]->term;
+				prevLogIndex = rc->ents[cc.second->next_index-1-rc->ents.front()->index]->index;
+				entryMatch = true;
 			} else {
 				if (cc.second->next_index-1==1) {
 					prevLogTerm = 0;
 					prevLogIndex = 0;
+					entryMatch = true;
 				} else {
 					LOGI("entry index not match: need %lld but begin with %d",cc.second->next_index-1,rc->ents.front()->index)
 					prevLogTerm = rc->ents.front()->term;
 					prevLogIndex = rc->ents.front()->index;
-					entryMatch = false;
 				}
 			}
 			if (entryMatch)
 				copy(rc->ents.begin()+cc.second->next_index-1-rc->ents.front()->index,rc->ents.end(),todo_ents.begin());
+			rc->mu.unlock();
 		}
 
 		grpc::ClientContext ctx;
