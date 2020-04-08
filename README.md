@@ -1,9 +1,9 @@
 # myraft
-implement raft use cpp
+implement raft with cpp
 
 # feature
-- support pipline
+- support pipeline
 - support batch
 
 # impl
-![image](http://github.com/Garfiled/myraft/raw/master/myraft.jpg)
+![image](https://github.com/Garfiled/myraft/blob/master/myraft.jpg)
