@@ -6,4 +6,4 @@ implement raft with cpp
 - support batch
 
 # impl
-![image](https://github.com/Garfiled/myraft/blob/master/myraft.jpg)
+<img src="https://github.com/Garfiled/myraft/blob/master/myraft.jpg" width="400">
