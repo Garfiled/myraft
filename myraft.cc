@@ -412,6 +412,8 @@ void startWalWorker(RaftNode* rn,RaftCore* rc)
 			} else {
 				if (msg->back)
 					msg->back->cv.notify_one();
+
+				delete msg;
 			}
 		}
 
