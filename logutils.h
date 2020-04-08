@@ -4,7 +4,7 @@
 #include <string.h>
 #include <time.h>
 
-#define DEBUG // log开关
+// #define DEBUG // log开关
 
 #ifdef DEBUG
 #define LOGD(format, ...) {time_t now=time(NULL);tm* local = localtime(&now);char buf[128] = {0};\

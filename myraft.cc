@@ -280,7 +280,7 @@ int RaftNode::handleHub(RaftCore* rc,RaftMsg* msg)
 				prevLogTerm = rc->ents[cc.second->next_index-1-rc->ents.front()->index]->term;
 				prevLogIndex = rc->ents[cc.second->next_index-1-rc->ents.front()->index]->index;
 
-				for (int i=cc.second->next_index-rc->ents.front()->index;i<msg->log_index-rc->ents.front()->index;i++)
+				for (int i=cc.second->next_index-rc->ents.front()->index;i<=msg->log_index-rc->ents.front()->index;i++)
 				{
 					todo_ents.push_back(rc->ents[i]);
 				}
@@ -469,7 +469,7 @@ int main(int argc, char const *argv[])
 		firstIndex = es.front()->index;
 		lastIndex = es.back()->index;
 	}
-	LOGI("wal entry: firstIndex %d lastIndex %d",firstIndex,lastIndex);
+	LOGI("wal entry: [ %d ... %d ]",firstIndex,lastIndex);
 
 	int startId = 1;
 	for (auto addr : peerAddrs)

@@ -35,7 +35,7 @@ grpc::Status RaftServiceImpl::RequestVote(grpc::ServerContext* context,const raf
         this->rc->mu.unlock();
         this->rc->msg_wal_cv.notify_one();
 
-        LOGI("node.%lld term %d approve vote",rc->id,term);
+        LOGI("node.%lld term %d approve vote for %u",rc->id,term,req->candidateid());
         rc->resetElectionTimer();
 
     } else {
@@ -68,9 +68,12 @@ grpc::Status RaftServiceImpl::AppendEntries(grpc::ServerContext* context,const r
     bool success = false;
     MsgBack* mb = nullptr;
 
-    LOGD("AppendEntries1: %lld %lld %lld",req->term(),req->prevlogterm(),req->prevlogindex());
+    LOGD("AppendEntries1: %lld %lld %lld %u",req->term(),req->prevlogterm(),req->prevlogindex(),req->entries().size());
     LOGD("AppendEntries2: %lld %d %d",rc->term,rc->lastLogTerm,rc->lastLogIndex);
     this->rc->mu.lock();
+    if (rc->ents.size()>0) {
+            LOGD("AppendEntry rc: %lu %d %d",rc->ents.size(),rc->ents.front()->index,rc->ents.back()->index);
+    }
     if (rc->term > req->term())
         term = rc->term;
     else {
