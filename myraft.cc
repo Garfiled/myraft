@@ -11,6 +11,9 @@
 #include "raft.h"
 #include "logutils.h"
 
+
+int startHttpWorker(int,int,RaftCore*);
+
 int RaftCore::propose(Entry* e) {
 	if (e==nullptr)
 		return -1;
@@ -514,6 +517,10 @@ int main(int argc, char const *argv[])
 
 	rc->resetElectionTimer();
 
+	ret = startHttpWorker(8379,1,rc);
+	if (ret!=0) {
+		return 1;
+	}
 	node_worker.join();
 	node_service.join();
 	wal_worker.join();
@@ -521,6 +528,7 @@ int main(int argc, char const *argv[])
 
 	return 0;
 }
+
 
 
 

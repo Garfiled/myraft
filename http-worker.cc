@@ -13,6 +13,7 @@
 
 #include "http-parser.h"
 #include "logutils.h"
+#include "raft.h"
 
 #define MAX_EVENTS 500
 
@@ -20,23 +21,26 @@ class HttpServer
 {
 public:
     int socket_fd;
+    RaftCore* rc;
 };
 
+HttpServer* server;
 
-void* worker(int);
+void worker(int);
 int acceptConn(int socket_fd,int epoll_fd);
 void sendHttpObj(HttpRequest&,std::string);
 void handleHttp(HttpRequest& req);
 
-int startHttpWorker(int port,int thread_num)
+int startHttpWorker(int port,int thread_num,RaftCore* rc_)
 {
+
     int socket_fd;
     struct sockaddr_in address;
     int addrlen = sizeof(address);
 
     if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0)
     {
-        LOGI("socket failed");
+        LOGE("socket failed");
         return -1;
     }
     address.sin_family = AF_INET;
@@ -45,13 +49,17 @@ int startHttpWorker(int port,int thread_num)
 
     if (bind(socket_fd, (struct sockaddr*)&address, sizeof(address))<0)
     {
-        LOGI("bind failed");
+        LOGE("bind failed");
         return -2;
     }
     if (listen(socket_fd, 5) < 0)
     {
         return -3;
     }
+
+    server = new HttpServer();
+    server->socket_fd = socket_fd;
+    server->rc = rc_;
 
     // 创建线程池
     for (int i=0;i<thread_num;i++)
@@ -73,7 +81,7 @@ void worker(int socket_fd)
     if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket_fd, &event) < 0)
     {
         LOGI("epoll add failed");
-        return
+        return;
     }
 
     std::map<int,Session> workerSess;
@@ -124,12 +132,19 @@ void worker(int socket_fd)
 
 void handleHttp(HttpRequest& req)
 {
+    int ret = 0;
     if (req.method=="GET")
     {
 
+    } else if (req.method == "POST") {
+        auto e = new Entry();
+        e->record = req.body;
+        ret = server->rc->propose(e);
     }
-
-    sendHttpObj(req,"ok");
+    if (ret==0)
+        sendHttpObj(req,"ok");
+    else
+        sendHttpObj(req,"handleHttp failed");
 }
 
 void sendHttpObj(HttpRequest& req,std::string o)
@@ -180,3 +195,4 @@ int acceptConn(int socket_fd,int epoll_fd)
 
     return client_fd;
 }
+
