@@ -33,7 +33,8 @@ int RaftCore::propose(Entry* e,void (*cb)(void*,int),void* cb_arg) {
 	msg-> callback_arg = cb_arg;
 
 	this->msg_wal_vec.push_back(msg);
-
+	this->mu.unlock();
+	this->msg_wal_cv.notify_one();
 	return 0;
 }
 

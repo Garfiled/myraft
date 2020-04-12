@@ -28,8 +28,8 @@ HttpServer* server;
 
 void worker(int);
 int acceptConn(int socket_fd,int epoll_fd);
-void sendHttpObj(HttpRequest&,std::string);
-void handleHttp(HttpRequest* req);
+void sendHttpObj(HttpRequest*,std::string);
+int handleHttp(HttpRequest* req);
 
 int startHttpWorker(int port,int thread_num,RaftCore* rc_)
 {
@@ -155,13 +155,18 @@ void httpRaftProposeCallback(void* arg,int err)
 int handleHttp(HttpRequest* req)
 {
     int ret = 0;
-    if (req.method=="GET")
+    if (req->method=="GET")
     {
+        sendHttpObj(req,"unimpl method");
+        return -1;
 
-    } else if (req.method == "POST") {
+    } else if (req->method == "POST") {
         auto e = new Entry();
-        e->record = req.body;
+        e->record = req->body;
         ret = server->rc->propose(e,httpRaftProposeCallback,req);
+    } else {
+        sendHttpObj(req,"unimpl method");
+        return -1;
     }
     if (ret!=0) {
         sendHttpObj(req,"handleHttp failed");

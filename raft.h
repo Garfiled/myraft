@@ -45,7 +45,7 @@ public:
 
 class RaftMsg {
 public:
-	RaftMsg(RaftMsgType mt):msg_type(mt),back(nullptr) {};
+	RaftMsg(RaftMsgType mt):msg_type(mt),back(nullptr),callback(nullptr) {};
 	int encoder(std::string& rec) 
 	{
 		if (msg_type==msg_vote) {
