@@ -7,17 +7,14 @@
 #include "http-parser.h"
 
 // 解析http协议
-int parseHttp(char* buf,int* start_p,int length,HttpRequest& req);
+int parseHttp(char* buf,int* start_p,int length,HttpRequest* req);
 int findHeaderEnd(char* buf,int start,int end);
 int findLine(char* buf,int start,int end);
 int findSpace(char* buf,int start,int end);
 int findSub(char* buf,int start,int end);
-
 int myAtoi(char* p,int end,int* val);
 
-extern void handleHttp(HttpRequest& req);
-
-int processQuery(Session& sess)
+int processQuery(Session& sess,HttpRequest* req)
 {
     int n = read(sess.fd,sess.buf+sess.len,sess.cap - sess.len);
     // std::cout << "processQuery:" << n << " " << sess.cap << std::endl;
@@ -31,8 +28,7 @@ int processQuery(Session& sess)
     sess.len += n;
 
     int start=0;
-    HttpRequest req;
-    req.fd = sess.fd;
+    req->fd = sess.fd;
     int ret = parseHttp(sess.buf,&start,sess.len,req);
 
     if (ret == 0)
@@ -44,13 +40,6 @@ int processQuery(Session& sess)
             sess.start = 0;
         }
 
-        // 命令解析完成，可以交给worker线程处理，这里暂时本地处理
-        handleHttp(req);
-
-        if (req.version == "HTTP/1.0" && req.header["Connection"] != "Keep-Alive") {
-            close(req.fd);
-            return ERR_HTTP_CONNECT_CLOSE;
-        }
         return 0;
 
     } else if (ret==ERR_HTTP_NOT_COMPLETE)
@@ -78,7 +67,7 @@ int processQuery(Session& sess)
 }
 
 
-int parseHttp(char* buf,int* start_p,int length,HttpRequest& req)
+int parseHttp(char* buf,int* start_p,int length,HttpRequest* req)
 {
     int start = *start_p;
     int headerLen = findHeaderEnd(buf,start,length);
@@ -90,18 +79,18 @@ int parseHttp(char* buf,int* start_p,int length,HttpRequest& req)
     int reqMethodLen = findSpace(buf,start,lineEnd);
     if (reqMethodLen<=0)
         return ERR_HTTP_REQ_METHOD;
-    req.method.append(buf+start,reqMethodLen);
+    req->method.append(buf+start,reqMethodLen);
     start += reqMethodLen+1;
     int reqURILen = findSpace(buf,start,lineEnd);
     if (reqURILen<=0)
         return ERR_HTTP_REQ_URI;
-    req.uri.append(buf+start,reqURILen);
+    req->uri.append(buf+start,reqURILen);
     start += reqURILen+1;
     if (start>=lineEnd)
         return ERR_HTTP_REQ_VERSION;
-    req.version.append(buf+start,lineEnd-start);
+    req->version.append(buf+start,lineEnd-start);
 
-   // std::cout << req.method << " " << req.uri << " " << req.version << std::endl;
+   // std::cout << req->method << " " << req->uri << " " << req->version << std::endl;
 
     if (lineEnd == headerEnd)
     {
@@ -120,7 +109,7 @@ int parseHttp(char* buf,int* start_p,int length,HttpRequest& req)
         std::string header_key(buf+start,headerKeyLen);
         std::string header_val(buf+start+headerKeyLen+2,lineLen-headerKeyLen-2);
         // std::cout << "header: " << header_key << " " << header_val << std::endl; 
-        req.header.insert(std::pair<std::string,std::string>(header_key,header_val));
+        req->header.insert(std::pair<std::string,std::string>(header_key,header_val));
 
         start = lineEnd+2;
     }
@@ -128,9 +117,9 @@ int parseHttp(char* buf,int* start_p,int length,HttpRequest& req)
     start += 2;
 
     // 需要继续解析Body数据
-    if (req.method == "POST" && req.header.find("Content-Length")!=req.header.end())
+    if (req->method == "POST" && req->header.find("Content-Length")!=req->header.end())
     {
-        std::string contentLengthStr = req.header["Content-Length"];
+        std::string contentLengthStr = req->header["Content-Length"];
         int contentLength;
         int ret = myAtoi((char*)contentLengthStr.c_str(),contentLengthStr.size(),&contentLength);
         if (ret<0 || contentLength<0)
@@ -138,7 +127,7 @@ int parseHttp(char* buf,int* start_p,int length,HttpRequest& req)
 
         if (length-start>=contentLength)
         {
-            req.body.append(buf+start,contentLength);
+            req->body.append(buf+start,contentLength);
             start += contentLength;
         } else {
             return ERR_HTTP_NOT_COMPLETE;

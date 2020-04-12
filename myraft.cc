@@ -14,7 +14,7 @@
 
 int startHttpWorker(int,int,RaftCore*);
 
-int RaftCore::propose(Entry* e) {
+int RaftCore::propose(Entry* e,void (*cb)(void*,int),void* cb_arg) {
 	if (e==nullptr)
 		return -1;
 	this->mu.lock();
@@ -29,18 +29,12 @@ int RaftCore::propose(Entry* e) {
 	}
 	
 	RaftMsg* msg = this->makePropMsg(e);
-	auto mb = new MsgBack();
-	msg->back = mb;
+	msg-> callback = cb;
+	msg-> callback_arg = cb_arg;
+
 	this->msg_wal_vec.push_back(msg);
 
-	this->mu.unlock();
-	this->msg_wal_cv.notify_one();
-
-	std::unique_lock<std::mutex> lk(mb->mu);
-	mb->cv.wait(lk);
-	int err = mb->err;
-	delete mb;
-	return err;
+	return 0;
 }
 
 RaftCore::RaftCore(int _id) {
@@ -96,21 +90,23 @@ void startElection(void* arg) {
 
 RaftMsg* RaftCore::makePropMsg(Entry* e)
 {
-	e->term = this->term;
-	e->index = this->lastLogIndex+1; 
-
-	// TODO batch
 	RaftMsg* m = new RaftMsg(msg_prop);
+	
 	m->id = this->id;
 	m->term = this->term;
 	m->log_term = this->lastLogTerm;
 	m->log_index = this->lastLogIndex;
+
+	e->term = this->term;
+	e->index = this->lastLogIndex+1; 
+
 	m->ents.push_back(e);
 
 	this->ents.push_back(e);
 
 	this->lastLogTerm = e->term;
 	this->lastLogIndex = e->index;
+	
 	return m;
 }
 
@@ -241,10 +237,10 @@ int RaftNode::handleProp(RaftCore* rc,RaftMsg* msg)
 		err = 1;
 	}
 
-	if (msg->back) {
-		msg->back->err = err;
-		msg->back->cv.notify_one();
+	if (msg->callback) {
+		msg->callback(msg->callback_arg,err);
 	}
+
 	if (maxTerm>msg->term) {
 		rc->vote_back(msg->term,false,maxTerm);
 	}

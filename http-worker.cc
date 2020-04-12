@@ -29,7 +29,7 @@ HttpServer* server;
 void worker(int);
 int acceptConn(int socket_fd,int epoll_fd);
 void sendHttpObj(HttpRequest&,std::string);
-void handleHttp(HttpRequest& req);
+void handleHttp(HttpRequest* req);
 
 int startHttpWorker(int port,int thread_num,RaftCore* rc_)
 {
@@ -115,13 +115,18 @@ void worker(int socket_fd)
                     continue;
                 }
 
-                int ret = processQuery(workerSess[eventList[i].data.fd]);
+                HttpRequest* req = new HttpRequest();
+                int ret = processQuery(workerSess[eventList[i].data.fd],req);
+
+                if (ret ==0) {
+                    ret = handleHttp(req);
+                }
                 if (ret!=0)
                 {
                     close(eventList[i].data.fd);
                     delete(workerSess[eventList[i].data.fd].buf);
                     workerSess.erase(eventList[i].data.fd);
-                }
+                } 
             }
         }
     }
@@ -130,7 +135,24 @@ void worker(int socket_fd)
 
 }
 
-void handleHttp(HttpRequest& req)
+void httpRaftProposeCallback(void* arg,int err)
+{
+    HttpRequest* req = (HttpRequest*)arg;
+
+    if (err) {
+        sendHttpObj(req,"handleHttp failed");
+    } else {
+        sendHttpObj(req,"ok");
+    }
+
+    if (req->version == "HTTP/1.0" && req->header["Connection"] != "Keep-Alive") {
+        close(req->fd);
+    }
+
+    delete req;
+}
+
+int handleHttp(HttpRequest* req)
 {
     int ret = 0;
     if (req.method=="GET")
@@ -139,18 +161,19 @@ void handleHttp(HttpRequest& req)
     } else if (req.method == "POST") {
         auto e = new Entry();
         e->record = req.body;
-        ret = server->rc->propose(e);
+        ret = server->rc->propose(e,httpRaftProposeCallback,req);
     }
-    if (ret==0)
-        sendHttpObj(req,"ok");
-    else
+    if (ret!=0) {
         sendHttpObj(req,"handleHttp failed");
+        return ret;
+    }
+    return 0;
 }
 
-void sendHttpObj(HttpRequest& req,std::string o)
+void sendHttpObj(HttpRequest* req,std::string o)
 {
     std::string ret;
-    ret.append(req.version);
+    ret.append(req->version);
     ret.append(" 200 OK\r\n",9);
     ret.append("Date: ",6);
     char buf[50];
@@ -164,7 +187,7 @@ void sendHttpObj(HttpRequest& req,std::string o)
     ret.append(std::to_string(o.size()));
     ret.append("\r\n",2);
     ret.append("Content-Type: text/plain; charset=utf-8\r\n",41);
-    if (req.version=="HTTP/1.0" && req.header["Connection"] == "Keep-Alive") {
+    if (req->version=="HTTP/1.0" && req->header["Connection"] == "Keep-Alive") {
         ret.append("Connection: keep-alive\r\n\r\n",26);
     } else {
         ret.append("\r\n",2);
@@ -172,7 +195,7 @@ void sendHttpObj(HttpRequest& req,std::string o)
     ret.append(o);
 
     // std::cout << ret << std::endl;
-    ::send(req.fd,ret.c_str(),ret.size(),0);
+    ::send(req->fd,ret.c_str(),ret.size(),0);
 }
 
 int acceptConn(int socket_fd,int epoll_fd)

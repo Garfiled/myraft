@@ -46,4 +46,4 @@ public:
     int fd;
 };
 
-int processQuery(Session&);
+int processQuery(Session&,HttpRequest*);

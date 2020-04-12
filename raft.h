@@ -79,7 +79,10 @@ public:
 	uint64_t log_term;
 	uint64_t log_index;
 	std::vector<Entry*> ents;
+	void* callback_arg;
+	void (*callback)(void*,int);
 	MsgBack* back;
+	int fd;
 };
 
 
@@ -104,10 +107,9 @@ public:
 	~RaftCore();
 
 	void tick();
-	int propose(Entry* e);
+	int propose(Entry*,void (*cb)(void*,int),void*);
 	int vote_back(int,bool,int);
-	void push_entry(Entry* e);
-	RaftMsg* makePropMsg(Entry* e);
+	RaftMsg* makePropMsg(Entry*);
 	void resetElectionTimer();
 	void resetHeartBeatTick();
 
