@@ -14,6 +14,7 @@
 #include "http-parser.h"
 #include "logutils.h"
 #include "raft.h"
+#include "rocksdb/db.h"
 
 #define MAX_EVENTS 500
 
@@ -22,6 +23,7 @@ class HttpServer
 public:
     int socket_fd;
     RaftCore* rc;
+    rocksdb::DB* db;
 };
 
 HttpServer* server;
@@ -61,11 +63,22 @@ int startHttpWorker(int port,int thread_num,RaftCore* rc_)
     server->socket_fd = socket_fd;
     server->rc = rc_;
 
+    rocksdb::Options options;
+    options.create_if_missing = true;
+    rocksdb::Status status = rocksdb::DB::Open(options, "./raft.db", &server->db);
+
+    if (!status.ok()) {
+        LOGI("open db err %s",status.ToString().c_str());
+        return -4;
+    }
+
+
     // 创建线程池
     for (int i=0;i<thread_num;i++)
     {
 	   auto w = new std::thread(worker,socket_fd);
     }
+
     return 0;
 }
 
@@ -135,6 +148,40 @@ void worker(int socket_fd)
 
 }
 
+// int checkKV(const char* input,int size) 
+// {
+//     if (size<8)
+//         return 1;
+//     std::string headerInput(input,4);
+//     if (headerInput!="pipi") {
+//         return 2;
+//     }
+
+//     int kLen = *((int32_t*)(input+4));
+
+//     if (size < 8 + kLen)
+//         return 3;
+//     return 0;
+// }
+
+// int decodeKV(const char* input,int size,std::string& k,std::string& v) 
+// {
+//     if (size<8)
+//         return 1;
+//     std::string headerInput(input,4);
+//     if (headerInput!="pipi") {
+//         return 2;
+//     }
+
+//     int kLen = *((int32_t*)(input+4));
+
+//     if (size < 8 + kLen)
+//         return 3;
+    
+//     k.append(input+8,kLen);
+//     v.append(input+8+kLen,size-8-kLen);
+// }
+
 void httpRaftProposeCallback(void* arg,int err)
 {
     HttpRequest* req = (HttpRequest*)arg;
@@ -142,7 +189,12 @@ void httpRaftProposeCallback(void* arg,int err)
     if (err) {
         sendHttpObj(req,"handleHttp failed");
     } else {
-        sendHttpObj(req,"ok");
+        rocksdb::Status s = server->db->Put(rocksdb::WriteOptions(),req->uri,req->body);
+        if (s.ok()) {
+            sendHttpObj(req,"ok");
+        } else {
+            sendHttpObj(req,s.ToString());
+        }
     }
 
     if (req->version == "HTTP/1.0" && req->header["Connection"] != "Keep-Alive") {
@@ -157,13 +209,22 @@ int handleHttp(HttpRequest* req)
     int ret = 0;
     if (req->method=="GET")
     {
-        sendHttpObj(req,"unimpl method");
-        return -1;
+        std::string v;
+        rocksdb::Status s = server->db->Get(rocksdb::ReadOptions(),req->uri,&v);
+        if (s.ok())
+            sendHttpObj(req,v);
+        else 
+            sendHttpObj(req,s.ToString());
 
-    } else if (req->method == "POST") {
+    } else if (req->method == "POST") { 
         auto e = new Entry();
-        e->record = req->body;
-        ret = server->rc->propose(e,httpRaftProposeCallback,req);
+        int32_t kLen = req->uri.size();
+        e->record.append((char*)&kLen,4);
+        int32_t vLen = req->body.size();
+        e->record.append((char*)&vLen,4);
+        e->record.append(req->uri);
+        e->record.append(req->body);
+        ret = server->rc->propose(e,httpRaftProposeCallback,req);    
     } else {
         sendHttpObj(req,"unimpl method");
         return -1;
